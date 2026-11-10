@@ -14,7 +14,6 @@ export function buildOrmConfig(config: AppConfig): Options {
     user: database.user,
     password: database.password,
     entities: persistenceEntities,
-    discovery: { warnWhenNoEntities: false },
     extensions: [Migrator],
     migrations: {
       migrationsList,
