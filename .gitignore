@@ -1,0 +1,16 @@
+# Dependências e artefatos
+node_modules/
+dist/
+coverage/
+*.log
+
+# Variáveis de ambiente locais (use .env.example como referência)
+.env
+.env.*
+!.env.example
+
+# Editores e sistema operacional
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

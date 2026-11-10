@@ -1,0 +1,140 @@
+name: jungle-gaming-wagering
+
+# Build único reaproveitado por API, workers e inicializador de filas
+x-app-build: &app-build
+  context: .
+  target: runtime
+
+# Variáveis compartilhadas por todas as instâncias da aplicação
+x-app-env: &app-env
+  NODE_ENV: ${NODE_ENV:-production}
+  PORT: ${PORT:-3000}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
+  SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-20000}
+  DB_HOST: wagering-postgres
+  DB_PORT: 5432
+  DB_NAME: ${DB_NAME:-wagering}
+  DB_USER: ${DB_USER:-wagering}
+  DB_PASSWORD: ${DB_PASSWORD:-wagering}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  DB_POOL_ACQUIRE_TIMEOUT_MS: ${DB_POOL_ACQUIRE_TIMEOUT_MS:-10000}
+  DB_LOCK_TIMEOUT_MS: ${DB_LOCK_TIMEOUT_MS:-5000}
+  DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-15000}
+  DB_TIMEZONE: ${DB_TIMEZONE:-America/Sao_Paulo}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  SQS_ENDPOINT: http://wagering-sqs:4566
+  SQS_WAGER_QUEUE_NAME: ${SQS_WAGER_QUEUE_NAME:-wager-transactions.fifo}
+  SQS_WAGER_DLQ_NAME: ${SQS_WAGER_DLQ_NAME:-wager-transactions-dlq.fifo}
+  SQS_EVENTS_QUEUE_NAME: ${SQS_EVENTS_QUEUE_NAME:-wagering-events.fifo}
+  SQS_CONSUMER_NAME: ${SQS_CONSUMER_NAME:-wager-transactions-consumer}
+  SQS_MAX_RECEIVES: ${SQS_MAX_RECEIVES:-5}
+  SQS_VISIBILITY_TIMEOUT_SECONDS: ${SQS_VISIBILITY_TIMEOUT_SECONDS:-30}
+  SQS_WAIT_TIME_SECONDS: ${SQS_WAIT_TIME_SECONDS:-20}
+  SQS_BATCH_SIZE: ${SQS_BATCH_SIZE:-10}
+  OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-500}
+  OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+  OUTBOX_LEASE_MS: ${OUTBOX_LEASE_MS:-30000}
+  OUTBOX_RETRY_BASE_DELAY_MS: ${OUTBOX_RETRY_BASE_DELAY_MS:-1000}
+  OUTBOX_RETRY_MAX_DELAY_MS: ${OUTBOX_RETRY_MAX_DELAY_MS:-60000}
+  PENDING_REFERENCE_POLL_INTERVAL_MS: ${PENDING_REFERENCE_POLL_INTERVAL_MS:-1000}
+  PENDING_REFERENCE_BATCH_SIZE: ${PENDING_REFERENCE_BATCH_SIZE:-50}
+  PENDING_REFERENCE_MAX_ATTEMPTS: ${PENDING_REFERENCE_MAX_ATTEMPTS:-10}
+  PENDING_REFERENCE_BASE_DELAY_MS: ${PENDING_REFERENCE_BASE_DELAY_MS:-1000}
+  PENDING_REFERENCE_MAX_DELAY_MS: ${PENDING_REFERENCE_MAX_DELAY_MS:-300000}
+
+x-app-depends: &app-depends
+  wagering-postgres:
+    condition: service_healthy
+  wagering-sqs-init:
+    condition: service_completed_successfully
+
+services:
+  wagering-postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-wagering}
+      POSTGRES_USER: ${DB_USER:-wagering}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-wagering}
+      TZ: ${DB_TIMEZONE:-America/Sao_Paulo}
+      PGTZ: ${DB_TIMEZONE:-America/Sao_Paulo}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - wagering-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wagering-sqs:
+    image: ministackorg/ministack:1.5.39
+    restart: unless-stopped
+    ports:
+      - "${SQS_HOST_PORT:-4566}:4566"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_ministack/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Cria as filas FIFO e a DLQ de forma idempotente e encerra
+  wagering-sqs-init:
+    build: *app-build
+    image: jungle-gaming-wagering:local
+    environment: *app-env
+    command: ["bun", "src/scripts/create-queues.ts"]
+    restart: "no"
+    depends_on:
+      wagering-sqs:
+        condition: service_healthy
+
+  wagering-api:
+    build: *app-build
+    image: jungle-gaming-wagering:local
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment: *app-env
+    ports:
+      - "${API_HOST_PORT:-3000}:3000"
+    depends_on: *app-depends
+
+  # Instâncias adicionais sem porta exposta, para concorrência real entre processos
+  wagering-worker:
+    build: *app-build
+    image: jungle-gaming-wagering:local
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment: *app-env
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    depends_on: *app-depends
+
+  # Suíte de testes (unidade, integração e concorrência) contra PostgreSQL e MiniStack reais
+  wagering-tests:
+    build:
+      context: .
+      target: dev
+    image: jungle-gaming-wagering:dev
+    profiles: ["test"]
+    environment:
+      <<: *app-env
+      NODE_ENV: test
+      LOG_LEVEL: ${TEST_LOG_LEVEL:-silent}
+      WORKERS_ENABLED: "false"
+      DB_NAME: ${TEST_DB_NAME:-wagering_test}
+    command: ["bun", "test"]
+    depends_on:
+      wagering-postgres:
+        condition: service_healthy
+      wagering-sqs:
+        condition: service_healthy
+
+volumes:
+  wagering-postgres-data:
