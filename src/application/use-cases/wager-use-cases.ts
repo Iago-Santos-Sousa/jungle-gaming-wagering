@@ -64,7 +64,6 @@ export class WagerSettlementWriter {
   constructor(
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
-    private readonly metrics: WageringMetrics,
     @Inject(REFERENCE_RETRY_POLICY) private readonly referencePolicy: RetryPolicy,
   ) {}
 
@@ -101,12 +100,6 @@ export class WagerSettlementWriter {
     const events = eventsForOutcome(transaction, wallet, ledgerEntry, { newEventId: () => this.ids.next(), occurredAt: now, ...ctx });
     await scope.outbox.add(events.map((event) => OutboxMessage.enqueue(event)));
   }
-
-  recordDecision(transaction: WagerTransaction): void {
-    if (transaction.status !== WagerTransactionStatus.PendingReference || transaction.referenceAttempts === 1) {
-      this.metrics.transactionDecided(transaction.kind, transaction.status);
-    }
-  }
 }
 
 // Executa a unidade de trabalho com novas tentativas limitadas para conflitos transitórios
@@ -134,13 +127,34 @@ export class SubmitWagerTransactionUseCase {
     private readonly ids: IdGenerator,
     private readonly metrics: WageringMetrics,
     private readonly writer: WagerSettlementWriter,
-  ) {}
+    private readonly logger: PinoLogger,
+  ) {
+    logger.setContext(SubmitWagerTransactionUseCase.name);
+  }
 
   async execute(command: SubmitWagerCommand, ctx: SubmitContext): Promise<WagerOutcome> {
     const startedAt = performance.now();
     const payloadHash = computeWagerPayloadHash(command);
     try {
-      return await withConflictRetry(this.metrics, 'submit', () => this.uow.transactional((scope) => this.process(scope, command, payloadHash, ctx)));
+      const outcome = await withConflictRetry(this.metrics, 'submit', () => this.uow.transactional((scope) => this.process(scope, command, payloadHash, ctx)));
+      // Métrica e log só depois do commit; replays não contam como nova decisão
+      if (!outcome.idempotentReplay) this.metrics.transactionDecided(command.kind, outcome.status);
+      this.logger.info(
+        {
+          source: ctx.source,
+          correlationId: ctx.correlationId,
+          messageId: ctx.inbox?.messageId,
+          transactionId: outcome.transactionId,
+          walletId: command.walletId,
+          providerId: command.providerId,
+          kind: command.kind,
+          status: outcome.status,
+          failureCode: outcome.failureCode,
+          idempotentReplay: outcome.idempotentReplay,
+        },
+        'wager transaction decided',
+      );
+      return outcome;
     } finally {
       this.metrics.processingDuration(ctx.source, (performance.now() - startedAt) / 1000);
     }
@@ -177,12 +191,10 @@ export class SubmitWagerTransactionUseCase {
 
     const transaction = WagerTransaction.create({ ...command, id: this.ids.next(), payloadHash, createdAt: now });
     await this.writer.settle(scope, transaction, wallet, true, { correlationId: ctx.correlationId, causationId: ctx.causationId });
-    this.writer.recordDecision(transaction);
     return outcomeOf(transaction, false);
   }
 
   private walletNotFound(duplicateMessage: boolean): WagerOutcome {
-    this.metrics.transactionDecided('UNKNOWN', WagerTransactionStatus.Rejected);
     return {
       transactionId: null,
       status: WagerTransactionStatus.Rejected,
@@ -212,28 +224,40 @@ export class ReprocessPendingReferenceUseCase {
   }
 
   async execute(transactionId: string): Promise<WagerTransactionStatus | null> {
-    return withConflictRetry(this.metrics, 'pending-reference', () =>
+    const transaction = await withConflictRetry(this.metrics, 'pending-reference', () =>
       this.uow.transactional(async (scope) => {
         const snapshot = await scope.transactions.findById(transactionId);
         if (snapshot?.status !== WagerTransactionStatus.PendingReference) return null;
 
         // Mesma ordem de locks do fluxo de submissão (wallet e depois transação), sem risco de deadlock
         const wallet = await scope.wallets.findByIdForUpdate(snapshot.walletId);
-        const transaction = await scope.transactions.findByIdForUpdate(transactionId);
+        const locked = await scope.transactions.findByIdForUpdate(transactionId);
         const now = this.clock.now();
         // Outra instância já decidiu ou a próxima tentativa ainda não venceu
-        if (!wallet || transaction?.status !== WagerTransactionStatus.PendingReference) return null;
-        if (transaction.nextAttemptAt && transaction.nextAttemptAt.getTime() > now.getTime()) return null;
+        if (!wallet || locked?.status !== WagerTransactionStatus.PendingReference) return null;
+        if (locked.nextAttemptAt && locked.nextAttemptAt.getTime() > now.getTime()) return null;
 
-        await this.writer.settle(scope, transaction, wallet, false, { correlationId: transaction.id, causationId: transaction.id });
-        this.writer.recordDecision(transaction);
-        this.logger.info(
-          { transactionId, walletId: wallet.id, providerId: transaction.providerId, status: transaction.status, attempts: transaction.referenceAttempts },
-          'pending reference reprocessed',
-        );
-        return transaction.status;
+        await this.writer.settle(scope, locked, wallet, false, { correlationId: locked.id, causationId: locked.id });
+        return locked;
       }),
     );
+    if (!transaction) return null;
+
+    // Nova tentativa ainda pendente não é decisão nova; terminal conta uma vez
+    if (transaction.isTerminal()) this.metrics.transactionDecided(transaction.kind, transaction.status);
+    this.logger.info(
+      {
+        correlationId: transaction.id,
+        transactionId: transaction.id,
+        walletId: transaction.walletId,
+        providerId: transaction.providerId,
+        status: transaction.status,
+        failureCode: transaction.failureCode,
+        attempts: transaction.referenceAttempts,
+      },
+      'pending reference reprocessed',
+    );
+    return transaction.status;
   }
 
   // Erro permanente de infraestrutura: registra FAILED para auditoria em vez de tentar para sempre
