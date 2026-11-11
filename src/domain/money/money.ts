@@ -13,9 +13,9 @@ export const MONEY_SCALE = 2;
 const MAX_INTEGER_DIGITS = 18;
 
 // Inteiro sem zeros à esquerda e até 2 casas decimais. Rejeita sinal, expoente, espaços e vazio.
-const AMOUNT_PATTERN = new RegExp(`^(0|[1-9]\\d{0,${MAX_INTEGER_DIGITS - 1}})(\\.\\d{1,${MONEY_SCALE}})?$`);
+export const AMOUNT_PATTERN = new RegExp(`^(0|[1-9]\\d{0,${MAX_INTEGER_DIGITS - 1}})(\\.\\d{1,${MONEY_SCALE}})?$`);
 
-const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+export const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
 // Construtor isolado do decimal.js: a configuração não vaza para o resto do processo
 const MoneyDecimal = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_EVEN, toExpNeg: -40, toExpPos: 40 });
