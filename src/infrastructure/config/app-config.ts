@@ -28,6 +28,9 @@ export interface SqsConfig {
   visibilityTimeoutSeconds: number;
   waitTimeSeconds: number;
   batchSize: number;
+  // Backoff da visibilidade em erro transitório (segundos)
+  retryBaseDelaySeconds: number;
+  retryMaxDelaySeconds: number;
 }
 
 export interface RetryConfig {
@@ -119,7 +122,10 @@ export function loadConfig(env: Env = process.env): AppConfig {
       maxReceives: readInt(env, 'SQS_MAX_RECEIVES', 5, 1),
       visibilityTimeoutSeconds: readInt(env, 'SQS_VISIBILITY_TIMEOUT_SECONDS', 30, 1),
       waitTimeSeconds: readInt(env, 'SQS_WAIT_TIME_SECONDS', 20),
-      batchSize: readInt(env, 'SQS_BATCH_SIZE', 10, 1),
+      batchSize: Math.min(readInt(env, 'SQS_BATCH_SIZE', 10, 1), 10),
+      retryBaseDelaySeconds: readInt(env, 'SQS_RETRY_BASE_DELAY_SECONDS', 2, 1),
+      // Teto do SQS para ChangeMessageVisibility é 12 horas
+      retryMaxDelaySeconds: Math.min(readInt(env, 'SQS_RETRY_MAX_DELAY_SECONDS', 300, 1), 43_200),
     },
     outbox: {
       pollIntervalMs: readInt(env, 'OUTBOX_POLL_INTERVAL_MS', 500, 1),

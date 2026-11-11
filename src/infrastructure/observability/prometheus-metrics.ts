@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { GetQueueAttributesCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 import { UnitOfWork } from '../../application/ports/repositories';
-import { WageringMetrics, type MetricSource } from '../../application/ports/system';
+import { Clock, WageringMetrics, type MetricSource } from '../../application/ports/system';
 import { APP_CONFIG, type AppConfig } from '../config/app-config';
 import { SQS_CLIENT, SqsQueueResolver } from '../messaging/sqs.module';
 
@@ -61,6 +61,7 @@ export class PrometheusWageringMetrics extends WageringMetrics {
 
   constructor(
     uow: UnitOfWork,
+    clock: Clock,
     queues: SqsQueueResolver,
     @Inject(SQS_CLIENT) sqs: SQSClient,
     @Inject(APP_CONFIG) config: AppConfig,
@@ -75,7 +76,7 @@ export class PrometheusWageringMetrics extends WageringMetrics {
       registers: [this.registry],
       async collect() {
         try {
-          this.set(await uow.read((scope) => scope.outbox.pendingLagSeconds()));
+          this.set(await uow.read((scope) => scope.outbox.pendingLagSeconds(clock.now())));
         } catch {
           // Banco indisponível não deve derrubar o endpoint de métricas
         }
