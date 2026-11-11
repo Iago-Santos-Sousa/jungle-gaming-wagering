@@ -242,30 +242,31 @@ class MikroOrmOutboxRepository implements OutboxRepository {
     await this.em.insertMany(OutboxMessageRecord, messages.map(fromOutboxMessage));
   }
 
-  async claimDue(limit: number, leaseMs: number): Promise<OutboxMessage[]> {
-    // Tempo do banco: leases comparáveis entre instâncias mesmo com relógios diferentes
+  async claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]> {
+    // SKIP LOCKED: publishers concorrentes pegam lotes disjuntos; lease vencido volta a ficar disponível
     const rows = await this.em.execute<RawOutboxRow[]>(
       `update outbox_messages o
-          set locked_until = now() + (? * interval '1 millisecond')
+          set locked_until = ?
         where o.id in (
           select id from outbox_messages
            where published_at is null
-             and next_attempt_at <= now()
-             and (locked_until is null or locked_until < now())
+             and next_attempt_at <= ?
+             and (locked_until is null or locked_until < ?)
            order by next_attempt_at
            limit ?
            for update skip locked)
        returning o.*`,
-      [leaseMs, limit],
+      [new Date(now.getTime() + leaseMs), now, now, limit],
     );
     return rows.map((row) => toOutboxMessage(fromRawOutbox(row))).sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
   }
 
-  async markPublished(message: OutboxMessage): Promise<void> {
+  async markPublished(messages: readonly OutboxMessage[]): Promise<void> {
+    if (messages.length === 0) return;
     await this.em.nativeUpdate(
       OutboxMessageRecord,
-      { id: message.id, publishedAt: null },
-      { publishedAt: message.publishedAt ?? new Date(), lockedUntil: null, lastError: null },
+      { id: { $in: messages.map((message) => message.id) }, publishedAt: null },
+      { publishedAt: messages[0]?.publishedAt ?? new Date(), lockedUntil: null, lastError: null },
     );
   }
 
@@ -277,9 +278,10 @@ class MikroOrmOutboxRepository implements OutboxRepository {
     );
   }
 
-  async pendingLagSeconds(): Promise<number> {
+  async pendingLagSeconds(now: Date): Promise<number> {
     const rows = await this.em.execute<{ lag: string | number | null }[]>(
-      `select extract(epoch from (now() - min(occurred_at))) as lag from outbox_messages where published_at is null`,
+      `select extract(epoch from (?::timestamptz - min(occurred_at))) as lag from outbox_messages where published_at is null`,
+      [now],
     );
     const lag = Number(rows[0]?.lag ?? 0);
     return Number.isFinite(lag) && lag > 0 ? lag : 0;

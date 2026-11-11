@@ -56,12 +56,14 @@ export interface InboxRepository {
 
 export interface OutboxRepository {
   add(messages: readonly OutboxMessage[]): Promise<void>;
-  // Reserva mensagens vencidas com lease (FOR UPDATE SKIP LOCKED), sem segurar transação aberta
-  claimDue(limit: number, leaseMs: number): Promise<OutboxMessage[]>;
-  markPublished(message: OutboxMessage): Promise<void>;
+  // Reserva mensagens vencidas com lease (FOR UPDATE SKIP LOCKED), sem segurar transação aberta.
+  // now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
+  claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]>;
+  // Marca o lote publicado com um único UPDATE
+  markPublished(messages: readonly OutboxMessage[]): Promise<void>;
   scheduleRetry(message: OutboxMessage, error: string): Promise<void>;
   // Idade em segundos da mensagem pendente mais antiga (outbox lag)
-  pendingLagSeconds(): Promise<number>;
+  pendingLagSeconds(now: Date): Promise<number>;
 }
 
 export interface RepositoryScope {
