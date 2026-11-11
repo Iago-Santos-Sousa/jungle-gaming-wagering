@@ -76,6 +76,13 @@ export interface TestApp {
 export async function startTestApp(overrides: Partial<Record<string, string>> = {}): Promise<TestApp> {
   await prepareTestEnvironment();
   const config = testConfig(overrides);
+  // Filas da configuração desta instância (idempotente), para arquivos de teste usarem filas isoladas
+  const sqs = createSqsClient(config);
+  try {
+    await createQueues(config, sqs);
+  } finally {
+    sqs.destroy();
+  }
   const app = await createApp(config);
   await app.listen(0, '127.0.0.1');
   const address = app.getHttpServer().address() as { port: number };
