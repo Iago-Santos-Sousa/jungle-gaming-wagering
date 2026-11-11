@@ -1,5 +1,3 @@
 [test]
 # Carrega os metadados de decorators antes de qualquer teste
 preload = ["./test/setup.ts"]
-# Testes de integração disputam locks reais no banco, então o timeout é generoso
-timeout = 60000
