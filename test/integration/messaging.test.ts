@@ -116,10 +116,10 @@ describe('consumer SQS', () => {
       inbox: { consumerName: ctx.config.sqs.consumerName, messageId, payloadHash: computeWagerPayloadHash(command) },
     });
 
-    // Após o visibility timeout, outra instância recebe a mesma mensagem
-    await consumeUntilEmpty(20_000, 3_500);
+    // Após o visibility timeout, outra instância recebe a mesma mensagem, detecta a duplicata e faz ack
+    await eventually(async () => (await consumer.pollOnce(0)) > 0, 30_000);
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '70.00', debits: 1 });
-    expect(await drain(sqs, wagerUrl)).toHaveLength(0);
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
   });
 
   test('mensagem inválida vai direto para a DLQ (erro permanente)', async () => {
@@ -150,8 +150,13 @@ describe('consumer SQS', () => {
 
     release();
     await holder;
-    await consumeUntilEmpty(20_000, 3_500);
+    // A mensagem volta após o backoff de visibilidade e é aplicada uma única vez
+    await eventually(async () => {
+      await consumer.pollOnce(0);
+      return (await readWalletState(em, wallet.walletId)).debits === 1;
+    }, 30_000);
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '95.00', debits: 1 });
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
     const metrics = await (await fetch(`${ctx.baseUrl}/metrics`)).text();
     expect(metrics).toMatch(/retries_total\{component="sqs"\} [1-9]/);
     expect(metrics).toMatch(/lock_conflicts_total [1-9]/);
