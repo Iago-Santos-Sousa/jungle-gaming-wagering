@@ -12,6 +12,8 @@
     "start": "bun src/main.ts",
     "dev": "bun --watch src/main.ts",
     "typecheck": "tsc --noEmit",
+    "sqs:create-queues": "bun src/scripts/create-queues.ts",
+    "sqs:send": "bun src/scripts/send-wager-message.ts",
     "test": "bun test --timeout 60000",
     "test:unit": "bun test --timeout 60000 test/unit",
     "test:integration": "bun test --timeout 60000 test/integration test/concurrency"
