@@ -34,6 +34,8 @@ x-app-env: &app-env
   SQS_VISIBILITY_TIMEOUT_SECONDS: ${SQS_VISIBILITY_TIMEOUT_SECONDS:-30}
   SQS_WAIT_TIME_SECONDS: ${SQS_WAIT_TIME_SECONDS:-20}
   SQS_BATCH_SIZE: ${SQS_BATCH_SIZE:-10}
+  SQS_RETRY_BASE_DELAY_SECONDS: ${SQS_RETRY_BASE_DELAY_SECONDS:-2}
+  SQS_RETRY_MAX_DELAY_SECONDS: ${SQS_RETRY_MAX_DELAY_SECONDS:-300}
   OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-500}
   OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
   OUTBOX_LEASE_MS: ${OUTBOX_LEASE_MS:-30000}
@@ -129,7 +131,7 @@ services:
       LOG_LEVEL: ${TEST_LOG_LEVEL:-silent}
       WORKERS_ENABLED: "false"
       DB_NAME: ${TEST_DB_NAME:-wagering_test}
-    command: ["bun", "test"]
+    command: ["bun", "run", "test"]
     depends_on:
       wagering-postgres:
         condition: service_healthy
