@@ -14,3 +14,6 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Resultados locais do teste de carga
+test/load/results/
