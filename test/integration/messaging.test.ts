@@ -542,6 +542,40 @@ describe('transactional outbox', () => {
     expect(idsIn(bySendOrder(published))).toEqual(pendingIds);
   });
 
+  test('broker fora do ar: runOnce não pede nova rodada e o retry em lote grava todas as falhas', async () => {
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
+    const wallets = await Promise.all(Array.from({ length: 3 }, () => createWallet(api, '100.00')));
+    const walletIds = wallets.map((wallet) => wallet.walletId);
+    // Só os eventos de saldo das 3 wallets ficam pendentes e vencidos: 3 cabeças
+    await em.fork().execute(`update outbox_messages set published_at = ? where published_at is null and aggregate_id <> all(?::uuid[])`, [new Date(), `{${walletIds.join(',')}}`]);
+    const headRows = await em.fork().execute<{ id: string }[]>(`select id from outbox_messages where published_at is null`);
+    await makeDue(headRows.map((row) => row.id));
+
+    const small = await startTestApp({ ...overrides, OUTBOX_BATCH_SIZE: '3' });
+    const client = small.app.get<SQSClient>(SQS_CLIENT);
+    const original = client.send.bind(client);
+    const spy = spyOn(client, 'send').mockImplementation((async (command: unknown, ...rest: unknown[]) => {
+      if (command instanceof SendMessageBatchCommand) throw new Error('simulated outage');
+      return (original as (...args: unknown[]) => Promise<unknown>)(command, ...rest);
+    }) as typeof client.send);
+    try {
+      // Claim cheio (3 de 3), mas nada saiu: sem progresso, o loop deve esperar o intervalo
+      expect(await small.app.get(OutboxPublisherWorker).runOnce()).toBe(false);
+    } finally {
+      spy.mockRestore();
+      await small.close();
+    }
+
+    const rows = await em.fork().execute<{ attempts: number; last_error: string | null; locked_until: Date | null }[]>(
+      `select attempts, last_error, locked_until from outbox_messages where id = any(?::uuid[])`,
+      [`{${headRows.map((row) => row.id).join(',')}}`],
+    );
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(row).toMatchObject({ attempts: 1, last_error: 'simulated outage', locked_until: null });
+    await makeDue(headRows.map((row) => row.id));
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
+  });
+
   test('runOnce sinaliza mais trabalho só quando o claim vem cheio', async () => {
     await walletWithOnlyBalanceEventsPending(4);
     const small = await startTestApp({ ...overrides, OUTBOX_BATCH_SIZE: '2' });

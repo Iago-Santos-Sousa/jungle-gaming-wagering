@@ -16,6 +16,8 @@ export interface OutboxPublishCycle {
   // Mensagens reservadas no ciclo; igual ao batchSize indica que provavelmente há mais trabalho
   claimed: number;
   published: number;
+  // Falhas reais do broker; com falha o ciclo não conta como progresso e o worker espera o intervalo
+  failed: number;
 }
 
 // Publica eventos confirmados da outbox. Vários publishers podem rodar ao mesmo tempo:
@@ -35,15 +37,16 @@ export class PublishOutboxUseCase {
     logger.setContext(PublishOutboxUseCase.name);
   }
 
-  async publishBatch(options: OutboxPublishOptions): Promise<OutboxPublishCycle> {
+  // shouldStop: pedido de shutdown; o publisher para entre rodadas e o ciclo confirma antes de o ORM fechar
+  async publishBatch(options: OutboxPublishOptions, shouldStop?: () => boolean): Promise<OutboxPublishCycle> {
     // Transação curta só para o claim: o lock das cabeças segura o agregado até o lease ficar visível
     const { leaseUntil, messages: claimed } = await this.uow.transactional((scope) =>
       scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs),
     );
-    if (claimed.length === 0) return { claimed: 0, published: 0 };
+    if (claimed.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
     // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed, skipped } = await this.publisher.publish(claimed);
+    const { published, failed, skipped } = await this.publisher.publish(claimed, { shouldStop });
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
@@ -65,6 +68,6 @@ export class PublishOutboxUseCase {
         'outbox publish partially failed',
       );
     }
-    return { claimed: claimed.length, published: published.length };
+    return { claimed: claimed.length, published: published.length, failed: failed.length };
   }
 }
