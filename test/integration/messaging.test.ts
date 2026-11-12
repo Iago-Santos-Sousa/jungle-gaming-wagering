@@ -259,8 +259,9 @@ describe('referências fora de ordem via SQS', () => {
       expect(response.status).toBe(202);
       pendingIds.push(String(response.body.transactionId));
     }
-    // Torna todas vencidas agora, sem esperar o backoff
-    await em.fork().execute(`update wager_transactions set next_attempt_at = now() - interval '1 second' where id = any(?::uuid[])`, [`{${pendingIds.join(',')}}`]);
+    // Torna todas vencidas agora, sem esperar o backoff. Usa o relógio da aplicação, não o now() do banco,
+    // porque o claim compara com o Clock da aplicação e os containers podem ter relógios desalinhados.
+    await em.fork().execute(`update wager_transactions set next_attempt_at = ? where id = any(?::uuid[])`, [new Date(Date.now() - 1_000), `{${pendingIds.join(',')}}`]);
 
     const other = await startTestApp(overrides);
     try {
@@ -276,7 +277,7 @@ describe('referências fora de ordem via SQS', () => {
 
       // Token antigo: o lease foi reemitido para outra instância, então o claim original não processa
       const stale = [...mine, ...theirs].find((claim) => pendingIds.includes(claim.transactionId))!;
-      await em.fork().execute(`update wager_transactions set next_attempt_at = now() + interval '1 minute' where id = ?`, [stale.transactionId]);
+      await em.fork().execute(`update wager_transactions set next_attempt_at = ? where id = ?`, [new Date(Date.now() + 60_000), stale.transactionId]);
       expect(await ctx.app.get(ReprocessPendingReferenceUseCase).execute(stale)).toBeNull();
     } finally {
       await other.close();
