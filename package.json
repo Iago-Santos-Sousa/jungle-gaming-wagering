@@ -16,7 +16,8 @@
     "sqs:send": "bun src/scripts/send-wager-message.ts",
     "test": "bun test --timeout 60000",
     "test:unit": "bun test --timeout 60000 test/unit",
-    "test:integration": "bun test --timeout 60000 test/integration test/concurrency"
+    "test:integration": "bun test --timeout 60000 test/integration test/concurrency",
+    "test:load": "bun test/load/load-test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1166.0",

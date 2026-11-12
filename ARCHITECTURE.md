@@ -65,13 +65,13 @@ Cenário obrigatório (saldo 100.00, duas apostas de 80.00 simultâneas) e a mes
 
 ## 5. Modelo de dados
 
-| Tabela | Garantias no schema |
-| --- | --- |
-| `wallets` | `UNIQUE (player_id, currency)`; `CHECK balance >= 0`; `CHECK version >= 1`; trigger: identidade imutável, version incrementa exatamente quando o saldo muda, exclusão proibida; constraint trigger adiada: saldo diferente do inicial vazio exige lançamento com o mesmo `balance_after` na mesma versão |
-| `wager_transactions` | `UNIQUE (idempotency_key)`; `UNIQUE (provider_id, external_transaction_id)`; CHECKs de kind, status, moeda, valor, referência obrigatória para REFUND/ROLLBACK, `failure_code` presente se e somente se REJECTED/FAILED, PROCESSED com `processed_at` e saldo observado; índice único parcial: uma reversão PROCESSED por referência; trigger: estado terminal imutável, campos de identidade imutáveis, exclusão proibida |
-| `wallet_ledger_entries` | Append-only (trigger bloqueia UPDATE, DELETE e TRUNCATE); `UNIQUE (transaction_id)` (no máximo um lançamento por transação); `UNIQUE (wallet_id, wallet_version)`; CHECK aritmético `balance_after = balance_before ± amount`; `amount > 0`; saldos não negativos; FK composta `(wallet_id, currency)` garante a moeda da wallet e `(transaction_id, wallet_id)` garante que a transação é da mesma wallet |
-| `inbox_messages` | PK `(consumer_name, message_id)` |
-| `outbox_messages` | Índices parciais `(next_attempt_at) WHERE published_at IS NULL AND is_head` (cabeças vencidas) e `(aggregate_id, sequence) WHERE published_at IS NULL`; `is_head` marca a pendente de menor `sequence` de cada agregado (`Migration20261113120000OutboxHeadFlag`, que também remove o índice de vencidas antigo); `sequence` identity `GENERATED ALWAYS` (ordem de publicação, migration `Migration20261112120000OutboxSequence`; o `UNIQUE` redundante saiu em `Migration20261112130000DropOutboxSequenceUnique`) |
+| Tabela                  | Garantias no schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `wallets`               | `UNIQUE (player_id, currency)`; `CHECK balance >= 0`; `CHECK version >= 1`; trigger: identidade imutável, version incrementa exatamente quando o saldo muda, exclusão proibida; constraint trigger adiada: saldo diferente do inicial vazio exige lançamento com o mesmo `balance_after` na mesma versão                                                                                                                                                                                                           |
+| `wager_transactions`    | `UNIQUE (idempotency_key)`; `UNIQUE (provider_id, external_transaction_id)`; CHECKs de kind, status, moeda, valor, referência obrigatória para REFUND/ROLLBACK, `failure_code` presente se e somente se REJECTED/FAILED, PROCESSED com `processed_at` e saldo observado; índice único parcial: uma reversão PROCESSED por referência; trigger: estado terminal imutável, campos de identidade imutáveis, exclusão proibida                                                                                         |
+| `wallet_ledger_entries` | Append-only (trigger bloqueia UPDATE, DELETE e TRUNCATE); `UNIQUE (transaction_id)` (no máximo um lançamento por transação); `UNIQUE (wallet_id, wallet_version)`; CHECK aritmético `balance_after = balance_before ± amount`; `amount > 0`; saldos não negativos; FK composta `(wallet_id, currency)` garante a moeda da wallet e `(transaction_id, wallet_id)` garante que a transação é da mesma wallet                                                                                                         |
+| `inbox_messages`        | PK `(consumer_name, message_id)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `outbox_messages`       | Índices parciais `(next_attempt_at) WHERE published_at IS NULL AND is_head` (cabeças vencidas) e `(aggregate_id, sequence) WHERE published_at IS NULL`; `is_head` marca a pendente de menor `sequence` de cada agregado (`Migration20261113120000OutboxHeadFlag`, que também remove o índice de vencidas antigo); `sequence` identity `GENERATED ALWAYS` (ordem de publicação, migration `Migration20261112120000OutboxSequence`; o `UNIQUE` redundante saiu em `Migration20261112130000DropOutboxSequenceUnique`) |
 
 Índices de consulta: `wager_transactions (wallet_id, created_at)`, índice parcial da fila de `PENDING_REFERENCE` por `next_attempt_at` e por `(provider_id, reference_external_transaction_id)`. A paginação do ledger usa o índice único `(wallet_id, wallet_version)`.
 
@@ -81,13 +81,13 @@ A migration inicial é versionada, escrita em SQL explícito (constraints, índi
 
 ## 6. Regras de negócio
 
-| Operação | Saldo | Ledger | Regra |
-| --- | --- | --- | --- |
-| `BET` | débito | 1 `DEBIT` | rejeita com `INSUFFICIENT_FUNDS` se faltar saldo |
-| `WIN` | crédito | 1 `CREDIT` | referência opcional; se informada, deve ser BET da mesma rodada |
-| `LOSS` | nenhum | nenhum | registra o resultado; referência opcional como no WIN; aceita valor zero |
-| `REFUND` | crédito | 1 `CREDIT` | reverte uma BET PROCESSED, uma única vez, pelo mesmo valor |
-| `ROLLBACK` | inverso da referência | 1 lançamento invertido | reverte BET, WIN ou REFUND PROCESSED, uma única vez, pelo mesmo valor |
+| Operação   | Saldo                 | Ledger                 | Regra                                                                    |
+| ---------- | --------------------- | ---------------------- | ------------------------------------------------------------------------ |
+| `BET`      | débito                | 1 `DEBIT`              | rejeita com `INSUFFICIENT_FUNDS` se faltar saldo                         |
+| `WIN`      | crédito               | 1 `CREDIT`             | referência opcional; se informada, deve ser BET da mesma rodada          |
+| `LOSS`     | nenhum                | nenhum                 | registra o resultado; referência opcional como no WIN; aceita valor zero |
+| `REFUND`   | crédito               | 1 `CREDIT`             | reverte uma BET PROCESSED, uma única vez, pelo mesmo valor               |
+| `ROLLBACK` | inverso da referência | 1 lançamento invertido | reverte BET, WIN ou REFUND PROCESSED, uma única vez, pelo mesmo valor    |
 
 Transições de status:
 
@@ -112,36 +112,36 @@ Interpretações adotadas:
 
 ### Códigos de falha
 
-| `failureCode` | Situação | O que o provedor faz |
-| --- | --- | --- |
-| `INSUFFICIENT_FUNDS` | BET maior que o saldo | Desiste ou envia outra aposta |
-| `REVERSAL_INSUFFICIENT_FUNDS` | ROLLBACK de WIN ou REFUND deixaria saldo negativo | Ação operacional; diferente de aposta sem saldo |
-| `CURRENCY_MISMATCH` | Moeda diferente da wallet | Corrige o payload |
-| `WALLET_NOT_FOUND` | Wallet inexistente | Corrige o `walletId` |
-| `WALLET_PLAYER_MISMATCH` | `playerId` não é o dono da wallet | Corrige o payload |
-| `REFERENCE_NOT_FOUND` | Referência não chegou dentro do limite de tentativas | Investiga a referência |
-| `REFERENCE_MISMATCH` | Referência de outro player, wallet, rodada ou moeda | Corrige a referência |
-| `REFERENCE_INVALID_KIND` | Tipo de referência não permitido | Corrige a referência |
-| `REFERENCE_NOT_PROCESSED` | Referência rejeitada ou falha | Desiste |
-| `REFERENCE_ALREADY_REVERSED` | Referência já revertida | Desiste |
-| `AMOUNT_MISMATCH` | Valor da reversão diferente da referência | Corrige o valor |
-| `BALANCE_LIMIT_EXCEEDED` | Crédito levaria o saldo além de `numeric(20,2)` (18 dígitos inteiros) | Desiste |
-| `INTERNAL_ERROR` | Erro permanente de infraestrutura (`FAILED`) | Contata o operador |
+| `failureCode`                 | Situação                                                              | O que o provedor faz                            |
+| ----------------------------- | --------------------------------------------------------------------- | ----------------------------------------------- |
+| `INSUFFICIENT_FUNDS`          | BET maior que o saldo                                                 | Desiste ou envia outra aposta                   |
+| `REVERSAL_INSUFFICIENT_FUNDS` | ROLLBACK de WIN ou REFUND deixaria saldo negativo                     | Ação operacional; diferente de aposta sem saldo |
+| `CURRENCY_MISMATCH`           | Moeda diferente da wallet                                             | Corrige o payload                               |
+| `WALLET_NOT_FOUND`            | Wallet inexistente                                                    | Corrige o `walletId`                            |
+| `WALLET_PLAYER_MISMATCH`      | `playerId` não é o dono da wallet                                     | Corrige o payload                               |
+| `REFERENCE_NOT_FOUND`         | Referência não chegou dentro do limite de tentativas                  | Investiga a referência                          |
+| `REFERENCE_MISMATCH`          | Referência de outro player, wallet, rodada ou moeda                   | Corrige a referência                            |
+| `REFERENCE_INVALID_KIND`      | Tipo de referência não permitido                                      | Corrige a referência                            |
+| `REFERENCE_NOT_PROCESSED`     | Referência rejeitada ou falha                                         | Desiste                                         |
+| `REFERENCE_ALREADY_REVERSED`  | Referência já revertida                                               | Desiste                                         |
+| `AMOUNT_MISMATCH`             | Valor da reversão diferente da referência                             | Corrige o valor                                 |
+| `BALANCE_LIMIT_EXCEEDED`      | Crédito levaria o saldo além de `numeric(20,2)` (18 dígitos inteiros) | Desiste                                         |
+| `INTERNAL_ERROR`              | Erro permanente de infraestrutura (`FAILED`)                          | Contata o operador                              |
 
 ### Códigos HTTP
 
 Consistentes em todos os endpoints. O corpo de erro é sempre `{ code, message, details?, correlationId }`.
 
-| Status | Situação |
-| --- | --- |
-| 400 `VALIDATION_ERROR` | Payload ou parâmetro inválido, `Idempotency-Key` ausente, cursor inválido |
-| 404 `NOT_FOUND` | Recurso inexistente nas consultas |
-| 409 | `IDEMPOTENCY_KEY_CONFLICT` ou `WALLET_ALREADY_EXISTS` |
-| 422 | Rejeição de negócio (corpo com `status: REJECTED` e `failureCode`) |
-| 202 | Aceita com processamento pendente (`PENDING_REFERENCE`) |
-| 503 `SERVICE_UNAVAILABLE` | Falha transitória (lock, corrida de inserção na mesma key, banco fora, timeout), com `Retry-After` |
-| 500 `PERMANENT_FAILURE` | Falha permanente conhecida (SQLSTATE das classes 22 e 23, exceto `23505`, e transição ilegal de estado): reenviar igual não resolve |
-| 500 `INTERNAL_ERROR` | Falha inesperada |
+| Status                    | Situação                                                                                                                            |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 400 `VALIDATION_ERROR`    | Payload ou parâmetro inválido, `Idempotency-Key` ausente, cursor inválido                                                           |
+| 404 `NOT_FOUND`           | Recurso inexistente nas consultas                                                                                                   |
+| 409                       | `IDEMPOTENCY_KEY_CONFLICT` ou `WALLET_ALREADY_EXISTS`                                                                               |
+| 422                       | Rejeição de negócio (corpo com `status: REJECTED` e `failureCode`)                                                                  |
+| 202                       | Aceita com processamento pendente (`PENDING_REFERENCE`)                                                                             |
+| 503 `SERVICE_UNAVAILABLE` | Falha transitória (lock, corrida de inserção na mesma key, banco fora, timeout), com `Retry-After`                                  |
+| 500 `PERMANENT_FAILURE`   | Falha permanente conhecida (SQLSTATE das classes 22 e 23, exceto `23505`, e transição ilegal de estado): reenviar igual não resolve |
+| 500 `INTERNAL_ERROR`      | Falha inesperada                                                                                                                    |
 
 ## 7. Referências fora de ordem
 
@@ -188,6 +188,7 @@ O `OutboxPublisherWorker` roda em todas as instâncias:
    `sequence` é uma coluna `bigint generated always as identity`, atribuída pelo banco no insert. O insert acontece com a wallet travada, então a sequência é monotônica por agregado na ordem de commit. A ordem nunca usa `occurred_at`: ele vem do relógio da aplicação, que pode andar para trás (os testes pegaram um `walletVersion` 5 publicado antes do 1 depois de uma ressincronização do relógio da VM do Docker).
 
    Cada agregado fica com um único publisher por vez, então dois publishers nunca publicam eventos da mesma wallet em paralelo e fora de ordem. O `FOR UPDATE` reavalia o lease na versão mais recente da linha: um agregado que outro publisher acabou de reservar fica de fora. A transação termina antes da publicação, sem conexão presa esperando o broker.
+
 2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos (`MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`), em rodadas: cada rodada envia o próximo evento de cada agregado, em lotes de até 10 enviados em paralelo, e **nenhum lote tem dois eventos do mesmo agregado**; as rodadas seguem em sequência. Assim uma falha parcial por entrada nunca deixa um evento posterior passar na frente de um anterior. Trade-off: uma wallet com muitos eventos pendentes publica um por chamada; o teto do claim mantém o pior caso dentro do lease. Depois da primeira falha de um agregado, os eventos seguintes dele não são enviados e voltam como `skipped`.
 3. **Confirmação** numa transação: publicadas com um único `UPDATE ... WHERE id = ANY(...)` (mais a promoção de cabeça), falhas com um único `UPDATE ... FROM (VALUES ...)` e `skipped` com um único `UPDATE`. Só falhas reais recebem backoff (1s a 60s), `last_error` e `retries_total`, sem limite de tentativas: evento confirmado nunca é descartado. As `skipped` só devolvem o lease, sem tentativa nem backoff; a cabeça com backoff segura o agregado inteiro e preserva a ordem. Um ciclo com falha não conta como progresso: o worker espera `OUTBOX_POLL_INTERVAL_MS` em vez de girar sem pausa sobre um acúmulo que não sai.
 
@@ -197,12 +198,12 @@ Agendamento e lease usam o `Clock` da aplicação, inclusive no SQL. Comparar `n
 
 Eventos (classe abstrata `IntegrationEvent<T>` com `eventType` e `version` no tipo de cada subclasse; `data` sempre com `MoneyProps`):
 
-| Evento | Quando | aggregateId |
-| --- | --- | --- |
-| `WagerTransactionProcessed` | Qualquer transação aplicada, inclusive LOSS e OPENING | transação |
-| `WagerTransactionRejected` | Rejeição de negócio | transação |
-| `WalletBalanceChanged` | Somente quando o saldo muda | wallet |
-| `WagerTransactionPendingReference` | Primeira vez que a referência está ausente | transação |
+| Evento                             | Quando                                                | aggregateId |
+| ---------------------------------- | ----------------------------------------------------- | ----------- |
+| `WagerTransactionProcessed`        | Qualquer transação aplicada, inclusive LOSS e OPENING | transação   |
+| `WagerTransactionRejected`         | Rejeição de negócio                                   | transação   |
+| `WalletBalanceChanged`             | Somente quando o saldo muda                           | wallet      |
+| `WagerTransactionPendingReference` | Primeira vez que a referência está ausente            | transação   |
 
 ## 10. Reconciliação
 
@@ -231,18 +232,18 @@ Desenho que seria adotado:
 
 Unidade para o domínio puro e integração com PostgreSQL e MiniStack reais para todo o resto. Os testes de concorrência usam paralelismo real (requisições simultâneas e processos independentes), não mocks sequenciais. Toda suíte que mexe em saldo termina verificando `wallet.balance == soma do ledger == último balance_after`.
 
-| Cenário obrigatório | Onde |
-| --- | --- |
-| Mesma aposta 50× em paralelo | `test/concurrency/http-concurrency.test.ts` |
-| Disputa pelo saldo da mesma wallet (100.00 com 2×80.00) | `test/concurrency/http-concurrency.test.ts` |
-| Wallets distintas em paralelo | `test/concurrency/http-concurrency.test.ts` |
-| 3 processos simultâneos | `test/concurrency/http-concurrency.test.ts` (`Bun.spawn` com barreira de início) |
-| Worker morto depois do commit e antes do ack | `test/integration/messaging.test.ts` |
-| Dois publishers sobre a mesma outbox | `test/integration/messaging.test.ts` |
-| ROLLBACK/REFUND antes da referência | `test/integration/messaging.test.ts` e `http-api.test.ts` |
-| Reinício do serviço com consistência final | `test/integration/messaging.test.ts` |
-| Migrations e constraints | `test/integration/schema.test.ts` |
-| Retry e DLQ | `test/integration/messaging.test.ts` |
+| Cenário obrigatório                                     | Onde                                                                             |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Mesma aposta 50× em paralelo                            | `test/concurrency/http-concurrency.test.ts`                                      |
+| Disputa pelo saldo da mesma wallet (100.00 com 2×80.00) | `test/concurrency/http-concurrency.test.ts`                                      |
+| Wallets distintas em paralelo                           | `test/concurrency/http-concurrency.test.ts`                                      |
+| 3 processos simultâneos                                 | `test/concurrency/http-concurrency.test.ts` (`Bun.spawn` com barreira de início) |
+| Worker morto depois do commit e antes do ack            | `test/integration/messaging.test.ts`                                             |
+| Dois publishers sobre a mesma outbox                    | `test/integration/messaging.test.ts`                                             |
+| ROLLBACK/REFUND antes da referência                     | `test/integration/messaging.test.ts` e `http-api.test.ts`                        |
+| Reinício do serviço com consistência final              | `test/integration/messaging.test.ts`                                             |
+| Migrations e constraints                                | `test/integration/schema.test.ts`                                                |
+| Retry e DLQ                                             | `test/integration/messaging.test.ts`                                             |
 
 O "crash depois do commit" é simulado de forma determinística: o teste recebe a mensagem, executa o use case com o contexto de inbox (commit) e não faz ack. Matar um processo no instante exato entre commit e ack seria não determinístico. O reinício usa o shutdown real da aplicação (os mesmos hooks do SIGTERM) com outra instância assumindo a fila.
 

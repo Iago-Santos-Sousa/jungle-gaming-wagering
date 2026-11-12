@@ -107,7 +107,8 @@ services:
       - "${API_HOST_PORT:-3000}:3000"
     depends_on: *app-depends
 
-  # Instâncias adicionais sem porta exposta, para concorrência real entre processos
+  # Instâncias adicionais para concorrência real entre processos. As portas no host deixam o teste de carga
+  # distribuir requisições entre todas as instâncias; o intervalo precisa ter uma porta por réplica.
   wagering-worker:
     build: *app-build
     image: jungle-gaming-wagering:local
@@ -115,6 +116,8 @@ services:
     init: true
     stop_grace_period: 35s
     environment: *app-env
+    ports:
+      - "${WORKER_HOST_PORTS:-3001-3002}:3000"
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
     depends_on: *app-depends
