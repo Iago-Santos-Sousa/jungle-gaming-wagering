@@ -1,11 +1,18 @@
-import type { OutboxMessage } from '../../domain/messaging/outbox-message';
+import type { OutboxMessage } from "../../domain/messaging/outbox-message";
 
 export interface PublishResult {
   published: OutboxMessage[];
   failed: { message: OutboxMessage; error: string }[];
+  skipped: OutboxMessage[];
 }
 
-// Publicação de eventos de integração no broker. Entrega at-least-once: o consumidor deduplica por eventId.
+export interface PublishOptions {
+  shouldStop?: () => boolean;
+}
+
 export abstract class EventPublisher {
-  abstract publish(messages: readonly OutboxMessage[]): Promise<PublishResult>;
+  abstract publish(
+    messages: readonly OutboxMessage[],
+    options?: PublishOptions,
+  ): Promise<PublishResult>;
 }

@@ -1,19 +1,23 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { PinoLogger } from 'nestjs-pino';
-import type { RetryPolicy } from '../../domain/shared/retry-policy';
-import { EventPublisher } from '../ports/event-publisher';
-import { UnitOfWork } from '../ports/repositories';
-import { Clock, WageringMetrics } from '../ports/system';
+import { Inject, Injectable } from "@nestjs/common";
+import { PinoLogger } from "nestjs-pino";
+import type { RetryPolicy } from "../../domain/shared/retry-policy";
+import { EventPublisher } from "../ports/event-publisher";
+import { UnitOfWork } from "../ports/repositories";
+import { Clock, WageringMetrics } from "../ports/system";
 
-export const OUTBOX_RETRY_POLICY = Symbol('OUTBOX_RETRY_POLICY');
+export const OUTBOX_RETRY_POLICY = Symbol("OUTBOX_RETRY_POLICY");
 
 export interface OutboxPublishOptions {
   batchSize: number;
   leaseMs: number;
 }
 
-// Publica eventos confirmados da outbox. Vários publishers podem rodar ao mesmo tempo:
-// o claim com lease e SKIP LOCKED entrega lotes disjuntos, e um lease vencido volta a ficar disponível.
+export interface OutboxPublishCycle {
+  claimed: number;
+  published: number;
+  failed: number;
+}
+
 @Injectable()
 export class PublishOutboxUseCase {
   constructor(
@@ -27,28 +31,59 @@ export class PublishOutboxUseCase {
     logger.setContext(PublishOutboxUseCase.name);
   }
 
-  // Retorna quantos eventos foram publicados neste ciclo
-  async publishBatch(options: OutboxPublishOptions): Promise<number> {
-    const claimed = await this.uow.read((scope) => scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs));
-    if (claimed.length === 0) return 0;
+  async publishBatch(
+    options: OutboxPublishOptions,
+    shouldStop?: () => boolean,
+  ): Promise<OutboxPublishCycle> {
+    const { leaseUntil, messages: claimed } = await this.uow.transactional(
+      (scope) =>
+        scope.outbox.claimDue(
+          this.clock.now(),
+          options.batchSize,
+          options.leaseMs,
+        ),
+    );
+    if (claimed.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
-    // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed } = await this.publisher.publish(claimed);
+    const roundDeadline = leaseUntil.getTime() - options.leaseMs / 2;
+
+    const stop = () =>
+      shouldStop?.() === true || this.clock.now().getTime() >= roundDeadline;
+
+    const { published, failed, skipped } = await this.publisher.publish(
+      claimed,
+      { shouldStop: stop },
+    );
+
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
-    await this.uow.read(async (scope) => {
-      await scope.outbox.markPublished(published);
-      for (const { message, error } of failed) {
-        message.scheduleRetry(now, this.retryPolicy);
-        await scope.outbox.scheduleRetry(message, error);
-      }
+    for (const { message } of failed)
+      message.scheduleRetry(now, this.retryPolicy);
+
+    await this.uow.transactional(async (scope) => {
+      await scope.outbox.markPublished(published, leaseUntil);
+      await scope.outbox.scheduleRetries(failed, leaseUntil);
+      await scope.outbox.releaseLease(skipped, leaseUntil);
     });
 
     if (failed.length > 0) {
-      for (let i = 0; i < failed.length; i++) this.metrics.retry('outbox');
-      this.logger.warn({ failed: failed.length, published: published.length, error: failed[0]?.error }, 'outbox publish partially failed');
+      for (let i = 0; i < failed.length; i++) this.metrics.retry("outbox");
+      this.logger.warn(
+        {
+          failed: failed.length,
+          skipped: skipped.length,
+          published: published.length,
+          error: failed[0]?.error,
+        },
+        "outbox publish partially failed",
+      );
     }
-    return published.length;
+
+    return {
+      claimed: claimed.length,
+      published: published.length,
+      failed: failed.length,
+    };
   }
 }

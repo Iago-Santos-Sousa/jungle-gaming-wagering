@@ -1,10 +1,9 @@
-import { Migration } from '@mikro-orm/migrations';
+import { Migration } from "@mikro-orm/migrations";
 
 // Schema inicial. As garantias de unicidade, imutabilidade e não negatividade vivem aqui,
 // no banco, e não só no código da aplicação.
 export class Migration20261110120000InitialSchema extends Migration {
   override async up(): Promise<void> {
-    // ---- wallets
     this.addSql(`
       create table wallets (
         id uuid primary key,
@@ -22,7 +21,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         constraint wallets_version_ck check (version >= 1)
       )`);
 
-    // ---- wager_transactions
     this.addSql(`
       create table wager_transactions (
         id uuid primary key,
@@ -83,7 +81,9 @@ export class Migration20261110120000InitialSchema extends Migration {
       create index wager_transactions_pending_by_reference_idx
         on wager_transactions (provider_id, reference_external_transaction_id)
         where status = 'PENDING_REFERENCE'`);
-    this.addSql(`create index wager_transactions_wallet_idx on wager_transactions (wallet_id, created_at)`);
+    this.addSql(
+      `create index wager_transactions_wallet_idx on wager_transactions (wallet_id, created_at)`,
+    );
 
     // Estado terminal é imutável e campos de identidade nunca mudam; exclusão é proibida
     this.addSql(`
@@ -109,7 +109,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         before update or delete on wager_transactions
         for each row execute function wager_transactions_guard()`);
 
-    // ---- wallet_ledger_entries
     this.addSql(`
       create table wallet_ledger_entries (
         id uuid primary key,
@@ -198,7 +197,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         deferrable initially deferred
         for each row execute function wallets_ledger_consistency()`);
 
-    // ---- inbox_messages
     this.addSql(`
       create table inbox_messages (
         consumer_name varchar(128) not null,
@@ -209,7 +207,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         constraint inbox_messages_pk primary key (consumer_name, message_id)
       )`);
 
-    // ---- outbox_messages
     this.addSql(`
       create table outbox_messages (
         id uuid primary key,
@@ -232,16 +229,18 @@ export class Migration20261110120000InitialSchema extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql('drop table if exists outbox_messages');
-    this.addSql('drop table if exists inbox_messages');
-    this.addSql('drop trigger if exists wallets_ledger_consistency_trg on wallets');
-    this.addSql('drop trigger if exists wallets_guard_trg on wallets');
-    this.addSql('drop table if exists wallet_ledger_entries');
-    this.addSql('drop table if exists wager_transactions');
-    this.addSql('drop table if exists wallets');
-    this.addSql('drop function if exists wallets_ledger_consistency()');
-    this.addSql('drop function if exists wallets_guard()');
-    this.addSql('drop function if exists wallet_ledger_entries_append_only()');
-    this.addSql('drop function if exists wager_transactions_guard()');
+    this.addSql("drop table if exists outbox_messages");
+    this.addSql("drop table if exists inbox_messages");
+    this.addSql(
+      "drop trigger if exists wallets_ledger_consistency_trg on wallets",
+    );
+    this.addSql("drop trigger if exists wallets_guard_trg on wallets");
+    this.addSql("drop table if exists wallet_ledger_entries");
+    this.addSql("drop table if exists wager_transactions");
+    this.addSql("drop table if exists wallets");
+    this.addSql("drop function if exists wallets_ledger_consistency()");
+    this.addSql("drop function if exists wallets_guard()");
+    this.addSql("drop function if exists wallet_ledger_entries_append_only()");
+    this.addSql("drop function if exists wager_transactions_guard()");
   }
 }

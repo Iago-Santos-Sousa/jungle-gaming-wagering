@@ -1,15 +1,29 @@
-import type { LedgerPage, ReconciliationReport } from '../../application/use-cases/wallet-use-cases';
-import type { WagerOutcome } from '../../application/use-cases/wager-use-cases';
-import type { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import type { WagerTransaction } from '../../domain/wager-transaction/wager-transaction';
-import type { Wallet } from '../../domain/wallet/wallet';
-import type { LedgerEntryResponse, LedgerPageResponse, ReconciliationResponse, WalletResponse } from './dto/wallet.dto';
-import type { WagerTransactionResponse, WagerTransactionResultResponse } from './dto/wager.dto';
-
-// Serialização de saída: dinheiro como MoneyProps e datas em ISO-8601 UTC
+import type {
+  LedgerPage,
+  ReconciliationReport,
+} from "../../application/use-cases/wallet-use-cases";
+import type { WagerOutcome } from "../../application/use-cases/wager-use-cases";
+import type { WalletLedgerEntry } from "../../domain/ledger/wallet-ledger-entry";
+import type { WagerTransaction } from "../../domain/wager-transaction/wager-transaction";
+import type { Wallet } from "../../domain/wallet/wallet";
+import type {
+  LedgerEntryResponse,
+  LedgerPageResponse,
+  ReconciliationResponse,
+  WalletResponse,
+} from "./dto/wallet.dto";
+import type {
+  WagerTransactionResponse,
+  WagerTransactionResultResponse,
+} from "./dto/wager.dto";
 
 export function presentWallet(wallet: Wallet): WalletResponse {
-  return { id: wallet.id, playerId: wallet.playerId, balance: wallet.balance.toJSON(), version: wallet.version };
+  return {
+    id: wallet.id,
+    playerId: wallet.playerId,
+    balance: wallet.balance.toJSON(),
+    version: wallet.version,
+  };
 }
 
 function presentLedgerEntry(entry: WalletLedgerEntry): LedgerEntryResponse {
@@ -26,10 +40,15 @@ function presentLedgerEntry(entry: WalletLedgerEntry): LedgerEntryResponse {
 }
 
 export function presentLedgerPage(page: LedgerPage): LedgerPageResponse {
-  return { items: page.items.map(presentLedgerEntry), nextCursor: page.nextCursor };
+  return {
+    items: page.items.map(presentLedgerEntry),
+    nextCursor: page.nextCursor,
+  };
 }
 
-export function presentReconciliation(report: ReconciliationReport): ReconciliationResponse {
+export function presentReconciliation(
+  report: ReconciliationReport,
+): ReconciliationResponse {
   return {
     walletId: report.walletId,
     storedBalance: report.storedBalance.toJSON(),
@@ -40,7 +59,9 @@ export function presentReconciliation(report: ReconciliationReport): Reconciliat
   };
 }
 
-export function presentOutcome(outcome: WagerOutcome): WagerTransactionResultResponse {
+export function presentOutcome(
+  outcome: WagerOutcome,
+): WagerTransactionResultResponse {
   return {
     transactionId: outcome.transactionId,
     status: outcome.status,
@@ -50,7 +71,9 @@ export function presentOutcome(outcome: WagerOutcome): WagerTransactionResultRes
   };
 }
 
-export function presentTransaction(transaction: WagerTransaction): WagerTransactionResponse {
+export function presentTransaction(
+  transaction: WagerTransaction,
+): WagerTransactionResponse {
   return {
     transactionId: transaction.id,
     providerId: transaction.providerId,
@@ -63,7 +86,8 @@ export function presentTransaction(transaction: WagerTransaction): WagerTransact
     money: transaction.money.toJSON(),
     status: transaction.status,
     failureCode: transaction.failureCode ?? null,
-    referenceExternalTransactionId: transaction.referenceExternalTransactionId ?? null,
+    referenceExternalTransactionId:
+      transaction.referenceExternalTransactionId ?? null,
     referenceTransactionId: transaction.referenceTransactionId ?? null,
     balance: transaction.resultBalance?.toJSON() ?? null,
     referenceAttempts: transaction.referenceAttempts,

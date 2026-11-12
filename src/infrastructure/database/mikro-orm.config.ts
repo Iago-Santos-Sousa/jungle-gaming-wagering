@@ -1,10 +1,9 @@
-import { defineConfig, type Options } from '@mikro-orm/postgresql';
-import { Migrator } from '@mikro-orm/migrations';
-import type { AppConfig } from '../config/app-config';
-import { persistenceEntities } from './entities';
-import { migrationsList } from './migrations';
+import { defineConfig, type Options } from "@mikro-orm/postgresql";
+import { Migrator } from "@mikro-orm/migrations";
+import type { AppConfig } from "../config/app-config";
+import { persistenceEntities } from "./entities";
+import { migrationsList } from "./migrations";
 
-// Configuração única do ORM, reaproveitada pela aplicação, pelos testes e pelos scripts
 export function buildOrmConfig(config: AppConfig): Options {
   const { database } = config;
   return defineConfig({
@@ -17,7 +16,7 @@ export function buildOrmConfig(config: AppConfig): Options {
     extensions: [Migrator],
     migrations: {
       migrationsList,
-      tableName: 'mikro_orm_migrations',
+      tableName: "mikro_orm_migrations",
       transactional: true,
       allOrNothing: true,
       snapshot: false,
@@ -29,7 +28,7 @@ export function buildOrmConfig(config: AppConfig): Options {
       // Espera por lock de linha vira erro transitório em vez de travar a requisição
       lock_timeout: database.lockTimeoutMs,
       statement_timeout: database.statementTimeoutMs,
-      application_name: 'jungle-gaming-wagering',
+      application_name: "jungle-gaming-wagering",
     },
     // Todo acesso usa um EntityManager explicitamente bifurcado; o global é proibido
     allowGlobalContext: false,

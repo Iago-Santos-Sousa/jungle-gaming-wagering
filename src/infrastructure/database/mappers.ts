@@ -1,15 +1,23 @@
-import type { LedgerDirection } from '../../domain/ledger/ledger-direction';
-import { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import { OutboxMessage } from '../../domain/messaging/outbox-message';
-import { Money } from '../../domain/money/money';
-import type { FailureCode } from '../../domain/wager-transaction/failure-code';
-import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatus } from '../../domain/wager-transaction/wager-transaction';
-import { Wallet } from '../../domain/wallet/wallet';
-import type { LedgerEntryRow, OutboxMessageRow, WagerTransactionRow, WalletRow } from './entities';
+import type { LedgerDirection } from "../../domain/ledger/ledger-direction";
+import { WalletLedgerEntry } from "../../domain/ledger/wallet-ledger-entry";
+import { OutboxMessage } from "../../domain/messaging/outbox-message";
+import { Money } from "../../domain/money/money";
+import type { FailureCode } from "../../domain/wager-transaction/failure-code";
+import {
+  WagerTransaction,
+  type WagerTransactionKind,
+  type WagerTransactionStatus,
+} from "../../domain/wager-transaction/wager-transaction";
+import { Wallet } from "../../domain/wallet/wallet";
+import type {
+  LedgerEntryRow,
+  OutboxMessageRow,
+  WagerTransactionRow,
+  WalletRow,
+} from "./entities";
 
-// Conversões explícitas entre registros do banco e entidades de domínio (reidratação sem revalidar transições)
-
-const money = (amount: string, currency: string): Money => Money.rehydrate({ amount, currency: currency.trim() });
+const money = (amount: string, currency: string): Money =>
+  Money.rehydrate({ amount, currency: currency.trim() });
 
 export function toWallet(row: WalletRow): Wallet {
   return Wallet.rehydrate({
@@ -37,7 +45,9 @@ export function fromWallet(wallet: Wallet): WalletRow {
 
 export function toWagerTransaction(row: WagerTransactionRow): WagerTransaction {
   const resultBalance =
-    row.resultBalanceAmount !== null && row.resultBalanceAmount !== undefined && row.resultBalanceCurrency
+    row.resultBalanceAmount !== null &&
+    row.resultBalanceAmount !== undefined &&
+    row.resultBalanceCurrency
       ? money(row.resultBalanceAmount, row.resultBalanceCurrency)
       : undefined;
   return WagerTransaction.rehydrate({
@@ -52,7 +62,8 @@ export function toWagerTransaction(row: WagerTransactionRow): WagerTransaction {
     gameId: row.gameId ?? undefined,
     kind: row.kind as WagerTransactionKind,
     money: money(row.amount, row.currency),
-    referenceExternalTransactionId: row.referenceExternalTransactionId ?? undefined,
+    referenceExternalTransactionId:
+      row.referenceExternalTransactionId ?? undefined,
     createdAt: row.createdAt,
     status: row.status as WagerTransactionStatus,
     referenceTransactionId: row.referenceTransactionId ?? undefined,
@@ -64,7 +75,9 @@ export function toWagerTransaction(row: WagerTransactionRow): WagerTransaction {
   });
 }
 
-export function fromWagerTransaction(transaction: WagerTransaction): WagerTransactionRow {
+export function fromWagerTransaction(
+  transaction: WagerTransaction,
+): WagerTransactionRow {
   return {
     id: transaction.id,
     providerId: transaction.providerId,
@@ -79,7 +92,8 @@ export function fromWagerTransaction(transaction: WagerTransaction): WagerTransa
     status: transaction.status,
     amount: transaction.money.toString(),
     currency: transaction.money.currency,
-    referenceExternalTransactionId: transaction.referenceExternalTransactionId ?? null,
+    referenceExternalTransactionId:
+      transaction.referenceExternalTransactionId ?? null,
     referenceTransactionId: transaction.referenceTransactionId ?? null,
     failureCode: transaction.failureCode ?? null,
     resultBalanceAmount: transaction.resultBalance?.toString() ?? null,
@@ -133,7 +147,11 @@ export function toOutboxMessage(row: OutboxMessageRow): OutboxMessage {
   });
 }
 
-export function fromOutboxMessage(message: OutboxMessage): OutboxMessageRow {
+// isHead é decidido pelo repositório no insert (depende das pendentes do agregado no banco)
+export function fromOutboxMessage(
+  message: OutboxMessage,
+  isHead = false,
+): OutboxMessageRow {
   return {
     id: message.id,
     aggregateId: message.aggregateId,
@@ -146,5 +164,6 @@ export function fromOutboxMessage(message: OutboxMessage): OutboxMessageRow {
     lockedUntil: null,
     publishedAt: message.publishedAt ?? null,
     lastError: null,
+    isHead,
   };
 }

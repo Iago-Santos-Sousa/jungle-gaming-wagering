@@ -1,15 +1,29 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsDefined, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
-import { LedgerDirection } from '../../../domain/ledger/ledger-direction';
-import { MoneyDto, MoneyResponse } from './money.dto';
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Type } from "class-transformer";
+import {
+  IsDefined,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from "class-validator";
+import { LedgerDirection } from "../../../domain/ledger/ledger-direction";
+import { MoneyDto, MoneyResponse } from "./money.dto";
 
 export class CreateWalletDto {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   @IsUUID()
   playerId!: string;
 
-  @ApiProperty({ type: MoneyDto, description: 'Saldo inicial; quando maior que zero gera a transação interna OPENING' })
+  @ApiProperty({
+    type: MoneyDto,
+    description:
+      "Saldo inicial; quando maior que zero gera a transação interna OPENING",
+  })
   @IsDefined()
   @ValidateNested()
   @Type(() => MoneyDto)
@@ -25,13 +39,17 @@ export const LEDGER_DEFAULT_LIMIT = 50;
 export const LEDGER_MAX_LIMIT = 100;
 
 export class LedgerQueryDto {
-  @ApiPropertyOptional({ description: 'Cursor opaco devolvido em nextCursor' })
+  @ApiPropertyOptional({ description: "Cursor opaco devolvido em nextCursor" })
   @IsOptional()
   @IsString()
   @MaxLength(256)
   cursor?: string;
 
-  @ApiPropertyOptional({ minimum: 1, maximum: LEDGER_MAX_LIMIT, default: LEDGER_DEFAULT_LIMIT })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: LEDGER_MAX_LIMIT,
+    default: LEDGER_DEFAULT_LIMIT,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -41,24 +59,26 @@ export class LedgerQueryDto {
 }
 
 export class WalletResponse {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   id!: string;
 
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   playerId!: string;
 
   @ApiProperty({ type: MoneyResponse })
   balance!: MoneyResponse;
 
-  @ApiProperty({ description: 'Inicia em 1 e incrementa somente quando o saldo muda' })
+  @ApiProperty({
+    description: "Inicia em 1 e incrementa somente quando o saldo muda",
+  })
   version!: number;
 }
 
 export class LedgerEntryResponse {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   id!: string;
 
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   transactionId!: string;
 
   @ApiProperty({ enum: LedgerDirection })
@@ -73,10 +93,13 @@ export class LedgerEntryResponse {
   @ApiProperty({ type: MoneyResponse })
   balanceAfter!: MoneyResponse;
 
-  @ApiProperty({ description: 'Versão da wallet após o lançamento (posição estável no ledger)' })
+  @ApiProperty({
+    description:
+      "Versão da wallet após o lançamento (posição estável no ledger)",
+  })
   walletVersion!: number;
 
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ format: "date-time" })
   createdAt!: string;
 }
 
@@ -84,12 +107,16 @@ export class LedgerPageResponse {
   @ApiProperty({ type: [LedgerEntryResponse] })
   items!: LedgerEntryResponse[];
 
-  @ApiProperty({ type: String, nullable: true, description: 'Cursor da próxima página; null quando não há mais itens' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "Cursor da próxima página; null quando não há mais itens",
+  })
   nextCursor!: string | null;
 }
 
 export class ReconciliationResponse {
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: "uuid" })
   walletId!: string;
 
   @ApiProperty({ type: MoneyResponse })
@@ -98,7 +125,10 @@ export class ReconciliationResponse {
   @ApiProperty({ type: MoneyResponse })
   calculatedBalance!: MoneyResponse;
 
-  @ApiProperty({ type: MoneyResponse, description: 'storedBalance menos calculatedBalance' })
+  @ApiProperty({
+    type: MoneyResponse,
+    description: "storedBalance menos calculatedBalance",
+  })
   difference!: MoneyResponse;
 
   @ApiProperty()

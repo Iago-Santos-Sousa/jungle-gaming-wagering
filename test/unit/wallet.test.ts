@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { LedgerDirection } from '../../src/domain/ledger/ledger-direction';
 import { WalletLedgerEntry } from '../../src/domain/ledger/wallet-ledger-entry';
 import { Money } from '../../src/domain/money/money';
-import { CurrencyMismatchError, InsufficientFundsError, InvalidArgumentError, UnbalancedLedgerEntryError } from '../../src/domain/shared/domain-error';
+import { BalanceLimitExceededError, CurrencyMismatchError, InsufficientFundsError, InvalidArgumentError, UnbalancedLedgerEntryError } from '../../src/domain/shared/domain-error';
 import { Wallet } from '../../src/domain/wallet/wallet';
 import { NOW, PLAYER_ID, WALLET_ID, brl, openWallet } from '../support/domain-builders';
 
@@ -25,6 +25,15 @@ describe('Wallet', () => {
 
   test('saldo inicial zero não gera abertura', () => {
     expect(openWallet('0.00').openingMovement()).toBeUndefined();
+  });
+
+  test('crédito que passaria do limite armazenável é recusado sem mudar saldo nem version', () => {
+    const wallet = openWallet('999999999999999999.00');
+    expect(() => wallet.credit(brl('1.00'), NOW)).toThrow(BalanceLimitExceededError);
+    expect(wallet.balance.toString()).toBe('999999999999999999.00');
+    expect(wallet.version).toBe(1);
+    // Ainda cabe: o maior valor de numeric(20,2)
+    expect(wallet.credit(brl('0.99'), NOW).balanceAfter.toString()).toBe('999999999999999999.99');
   });
 
   test('débito e crédito incrementam version somente quando o saldo muda', () => {

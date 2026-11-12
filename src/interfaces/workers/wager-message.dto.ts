@@ -1,9 +1,21 @@
-import { plainToInstance, Type } from 'class-transformer';
-import { Equals, IsDefined, IsISO8601, IsString, Length, Matches, ValidateNested, validate } from 'class-validator';
-import { InvalidArgumentError } from '../../domain/shared/domain-error';
-import { IDENTIFIER_PATTERN, WagerTransactionPayloadDto } from '../http/dto/wager.dto';
+import { plainToInstance, Type } from "class-transformer";
+import {
+  Equals,
+  IsDefined,
+  IsISO8601,
+  IsString,
+  Length,
+  Matches,
+  ValidateNested,
+  validate,
+} from "class-validator";
+import { InvalidArgumentError } from "../../domain/shared/domain-error";
+import {
+  IDENTIFIER_PATTERN,
+  WagerTransactionPayloadDto,
+} from "../http/dto/wager.dto";
 
-export const WAGER_MESSAGE_TYPE = 'WagerTransactionRequested';
+export const WAGER_MESSAGE_TYPE = "WagerTransactionRequested";
 
 // Mesmos campos de negócio da entrada HTTP, mais a idempotency key que no HTTP vem no header
 export class WagerTransactionMessageDataDto extends WagerTransactionPayloadDto {
@@ -33,20 +45,30 @@ export class WagerTransactionMessageDto {
 // Payload que não passa no contrato é erro permanente: reenviar a mesma mensagem nunca vai funcionar
 export class InvalidWagerMessageError extends InvalidArgumentError {}
 
-export async function parseWagerMessage(body: string | undefined): Promise<WagerTransactionMessageDto> {
+export async function parseWagerMessage(
+  body: string | undefined,
+): Promise<WagerTransactionMessageDto> {
   let raw: unknown;
+
   try {
-    raw = JSON.parse(body ?? '');
+    raw = JSON.parse(body ?? "");
   } catch {
-    throw new InvalidWagerMessageError('Message body is not valid JSON');
+    throw new InvalidWagerMessageError("Message body is not valid JSON");
   }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new InvalidWagerMessageError('Message body must be a JSON object');
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw new InvalidWagerMessageError("Message body must be a JSON object");
 
   const message = plainToInstance(WagerTransactionMessageDto, raw);
-  const errors = await validate(message, { whitelist: true, forbidNonWhitelisted: true });
+  const errors = await validate(message, {
+    whitelist: true,
+    forbidNonWhitelisted: true,
+  });
+
   if (errors.length > 0) {
-    const fields = errors.map((error) => error.property).join(', ');
+    const fields = errors.map((error) => error.property).join(", ");
     throw new InvalidWagerMessageError(`Invalid message fields: ${fields}`);
   }
+
   return message;
 }
