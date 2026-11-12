@@ -52,8 +52,8 @@ export interface LedgerRepository {
 }
 
 export interface InboxRepository {
-  // Retorna false se a mensagem já foi registrada (duplicata)
-  tryInsert(message: InboxMessage): Promise<boolean>;
+  // Registra a mensagem. Retorna null se for nova, ou o registro já existente se for duplicata.
+  register(message: InboxMessage): Promise<InboxMessage | null>;
 }
 
 export interface OutboxRepository {

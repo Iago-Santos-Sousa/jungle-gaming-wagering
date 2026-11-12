@@ -12,7 +12,7 @@ import type {
   WalletRepository,
 } from '../../application/ports/repositories';
 import type { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import type { InboxMessage } from '../../domain/messaging/inbox-message';
+import { InboxMessage } from '../../domain/messaging/inbox-message';
 import type { OutboxMessage } from '../../domain/messaging/outbox-message';
 import { Money } from '../../domain/money/money';
 import { WagerTransactionKind, WagerTransactionStatus, type WagerTransaction } from '../../domain/wager-transaction/wager-transaction';
@@ -199,7 +199,7 @@ class MikroOrmLedgerRepository implements LedgerRepository {
 class MikroOrmInboxRepository implements InboxRepository {
   constructor(private readonly em: EntityManager) {}
 
-  async tryInsert(message: InboxMessage): Promise<boolean> {
+  async register(message: InboxMessage): Promise<InboxMessage | null> {
     // ON CONFLICT DO NOTHING: uma entrega concorrente da mesma mensagem espera o commit da outra e vira duplicata
     const rows = await this.em.execute<{ message_id: string }[]>(
       `insert into inbox_messages (consumer_name, message_id, payload_hash, received_at, processed_at)
@@ -208,7 +208,22 @@ class MikroOrmInboxRepository implements InboxRepository {
        returning message_id`,
       [message.consumerName, message.messageId, message.payloadHash, message.receivedAt, message.processedAt ?? null],
     );
-    return rows.length === 1;
+    if (rows.length === 1) return null;
+
+    // Só na duplicata: lê o registro confirmado para comparar o payload
+    const [existing] = await this.em.execute<{ payload_hash: string; received_at: Date; processed_at: Date | null }[]>(
+      `select payload_hash, received_at, processed_at from inbox_messages where consumer_name = ? and message_id = ?`,
+      [message.consumerName, message.messageId],
+    );
+    // Conflito sem linha visível só acontece se a outra entrega reverteu no meio: tentar de novo resolve
+    if (!existing) throw new ConcurrencyConflictError(`Inbox message ${message.messageId} changed concurrently`);
+    return InboxMessage.rehydrate({
+      consumerName: message.consumerName,
+      messageId: message.messageId,
+      payloadHash: existing.payload_hash.trim(),
+      receivedAt: new Date(existing.received_at),
+      processedAt: existing.processed_at ? new Date(existing.processed_at) : undefined,
+    });
   }
 }
 

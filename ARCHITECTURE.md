@@ -155,6 +155,7 @@ Uma transação cuja referência não existe vira `PENDING_REFERENCE`, com `refe
 Filas: `wager-transactions.fifo` (entrada), `wager-transactions-dlq.fifo` e `wagering-events.fifo` (eventos de saída, ver seção 9).
 
 - Inbox persistente por `(consumerName, messageId)` gravado **na mesma transação** do efeito financeiro (`INSERT ... ON CONFLICT DO NOTHING`). Uma entrega concorrente da mesma mensagem espera o commit da outra no índice e vira duplicata.
+- O inbox guarda o `payload_hash` da mensagem (SHA-256 do hash de negócio mais a `idempotencyKey`). Uma duplicata com hash diferente é tratada como **conflito**, não como reentrega: a mensagem recebe ack sem efeito, gera log `warn` e incrementa `duplicates_detected_total{source="inbox_conflict"}`.
 - `ack` (`DeleteMessage`) só depois do commit. Se o processo morre entre o commit e o ack, a reentrega encontra o inbox e só faz o ack.
 - Classificação de falhas:
   - **negócio** (REJECTED, `WALLET_NOT_FOUND`, conflito de idempotência): terminal, ack;

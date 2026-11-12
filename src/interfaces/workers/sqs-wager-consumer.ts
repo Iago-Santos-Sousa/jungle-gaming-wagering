@@ -14,7 +14,7 @@ import { SubmitWagerTransactionUseCase } from '../../application/use-cases/wager
 import { Money } from '../../domain/money/money';
 import { InvalidArgumentError } from '../../domain/shared/domain-error';
 import { RetryPolicy } from '../../domain/shared/retry-policy';
-import { computeWagerPayloadHash } from '../../domain/wager-transaction/wager-transaction';
+import { computeInboxPayloadHash } from '../../domain/wager-transaction/wager-transaction';
 import { APP_CONFIG, type AppConfig } from '../../infrastructure/config/app-config';
 import { isTransientDatabaseError } from '../../infrastructure/database/database-errors';
 import { SQS_CLIENT, SqsQueueResolver } from '../../infrastructure/messaging/sqs.module';
@@ -140,7 +140,7 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         source: 'sqs',
         correlationId: envelope.messageId,
         causationId: envelope.messageId,
-        inbox: { consumerName: this.config.sqs.consumerName, messageId: envelope.messageId, payloadHash: computeWagerPayloadHash(command) },
+        inbox: { consumerName: this.config.sqs.consumerName, messageId: envelope.messageId, payloadHash: computeInboxPayloadHash(command) },
       });
       // Ack somente depois do commit (o use case já retornou)
       await this.ack(message);

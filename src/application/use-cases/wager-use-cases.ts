@@ -166,8 +166,12 @@ export class SubmitWagerTransactionUseCase {
     if (ctx.inbox) {
       const inbox = InboxMessage.receive({ ...ctx.inbox, receivedAt: now });
       inbox.markProcessed(now);
-      const fresh = await scope.inbox.tryInsert(inbox);
-      if (!fresh) {
+      const registered = await scope.inbox.register(inbox);
+      if (registered) {
+        if (!registered.matchesPayload(ctx.inbox.payloadHash)) {
+          this.metrics.duplicateDetected('inbox_conflict');
+          throw new IdempotencyConflictError('messageId already used with a different payload');
+        }
         this.metrics.duplicateDetected('inbox');
         const previous = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
         return previous ? outcomeOf(previous, true, true) : this.walletNotFound(true);

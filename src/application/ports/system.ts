@@ -13,7 +13,7 @@ export type MetricSource = 'http' | 'sqs' | 'worker';
 // Métricas de negócio e operação, desacopladas da biblioteca de exposição
 export abstract class WageringMetrics {
   abstract transactionDecided(kind: string, status: string): void;
-  abstract duplicateDetected(source: MetricSource | 'inbox'): void;
+  abstract duplicateDetected(source: MetricSource | 'inbox' | 'inbox_conflict'): void;
   abstract retry(component: string): void;
   abstract dlqMessage(reason: string): void;
   abstract lockConflict(): void;

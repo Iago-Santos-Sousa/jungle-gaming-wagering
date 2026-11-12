@@ -5,7 +5,7 @@ import { EventPublisher } from '../../src/application/ports/event-publisher';
 import { UnitOfWork } from '../../src/application/ports/repositories';
 import { SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
 import { Money } from '../../src/domain/money/money';
-import { computeWagerPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
+import { computeInboxPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
@@ -101,6 +101,27 @@ describe('consumer SQS', () => {
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
   });
 
+  test('messageId reutilizado com outra operação é conflito: ack sem efeito, nunca replay', async () => {
+    const wallet = await createWallet(api, '100.00');
+    const messageId = `msg-${newId()}`;
+    await send(messageData(wallet, { amount: '10.00' }), messageId);
+    await consumeUntilEmpty();
+
+    const conflicting = messageData(wallet, { amount: '20.00' });
+    await send(conflicting, messageId);
+    await consumeUntilEmpty();
+
+    // A segunda operação não foi persistida nem moveu saldo, e a mensagem saiu da fila sem ir para a DLQ
+    expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
+    const stored = await em.fork().execute(`select id from wager_transactions where idempotency_key = ?`, [conflicting.idempotencyKey]);
+    expect(stored).toHaveLength(0);
+    expect(await inboxCount(messageId)).toBe(1);
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+    expect(await drain(sqs, dlqUrl, 0)).toHaveLength(0);
+    const metrics = await (await fetch(`${ctx.baseUrl}/metrics`)).text();
+    expect(metrics).toMatch(/duplicates_detected_total\{source="inbox_conflict"\} [1-9]/);
+  });
+
   test('worker morto depois do commit e antes do ack: a reentrega é deduplicada', async () => {
     const wallet = await createWallet(api, '100.00');
     const data = messageData(wallet, { amount: '30.00' });
@@ -113,7 +134,7 @@ describe('consumer SQS', () => {
     await ctx.app.get(SubmitWagerTransactionUseCase).execute(command, {
       source: 'sqs',
       correlationId: messageId,
-      inbox: { consumerName: ctx.config.sqs.consumerName, messageId, payloadHash: computeWagerPayloadHash(command) },
+      inbox: { consumerName: ctx.config.sqs.consumerName, messageId, payloadHash: computeInboxPayloadHash(command) },
     });
 
     // Após o visibility timeout, outra instância recebe a mesma mensagem, detecta a duplicata e faz ack

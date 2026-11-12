@@ -103,7 +103,7 @@ export class PrometheusWageringMetrics extends WageringMetrics {
     this.transactions.inc({ kind, status });
   }
 
-  duplicateDetected(source: MetricSource | 'inbox'): void {
+  duplicateDetected(source: MetricSource | 'inbox' | 'inbox_conflict'): void {
     this.duplicates.inc({ source });
   }
 
