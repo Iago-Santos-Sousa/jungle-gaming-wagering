@@ -110,7 +110,9 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
       await this.em.insert(WagerTransactionRecord, fromWagerTransaction(transaction));
     } catch (error) {
       const constraint = uniqueViolationConstraint(error);
-      if (constraint && IDEMPOTENCY_CONSTRAINTS.has(constraint)) {
+      // 'unknown': o driver não informou o nome. As outras unique da tabela só colidiriam com UUIDv7 repetido,
+      // então tratar como corrida de idempotência (o use case relê e responde replay ou conflito) é o caminho seguro.
+      if (constraint && (IDEMPOTENCY_CONSTRAINTS.has(constraint) || constraint === 'unknown')) {
         throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
       }
       throw error;

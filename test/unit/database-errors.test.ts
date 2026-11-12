@@ -24,6 +24,10 @@ describe('classificação de erros do banco', () => {
     expect(isTransientDatabaseError(pgError(code))).toBe(true);
   });
 
+  test('23505 (unique_violation) não é permanente: corrida de inserção se resolve relendo', () => {
+    expect(isPermanentDatabaseError(pgError('23505'))).toBe(false);
+  });
+
   test('erro sem SQLSTATE não é classificado como permanente', () => {
     expect(isPermanentDatabaseError(new Error('boom'))).toBe(false);
     expect(isPermanentDatabaseError('not an error')).toBe(false);
