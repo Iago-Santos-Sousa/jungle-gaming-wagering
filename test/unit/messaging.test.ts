@@ -60,6 +60,8 @@ describe('OutboxMessage', () => {
 describe('InboxMessage', () => {
   test('marca processamento uma única vez', () => {
     const inbox = InboxMessage.receive({ messageId: 'msg-1', consumerName: 'c', payloadHash: 'h', receivedAt: NOW });
+    expect(inbox.matchesPayload('h')).toBe(true);
+    expect(inbox.matchesPayload('other')).toBe(false);
     expect(inbox.isProcessed()).toBe(false);
     inbox.markProcessed(NOW);
     expect(inbox.isProcessed()).toBe(true);

@@ -45,6 +45,17 @@ describe('settleWagerTransaction', () => {
       expect(ledgerEntry?.direction).toBe(LedgerDirection.Credit);
     });
 
+    test('crédito acima do limite armazenável rejeita com BALANCE_LIMIT_EXCEEDED sem ledger', () => {
+      const wallet = openWallet('999999999999999999.00');
+      const win = buildTransaction({ kind: WagerTransactionKind.Win, money: brl('1.00') });
+      const { ledgerEntry } = settle(win, wallet);
+      expect(win.status).toBe(WagerTransactionStatus.Rejected);
+      expect(win.failureCode).toBe(FailureCode.BalanceLimitExceeded);
+      expect(ledgerEntry).toBeUndefined();
+      expect(wallet.balance.toString()).toBe('999999999999999999.00');
+      expect(wallet.version).toBe(1);
+    });
+
     test('pode referenciar a BET da mesma rodada', () => {
       const wallet = openWallet('10.00');
       const bet = processedTransaction({ externalTransactionId: 'bet-1' });

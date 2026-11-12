@@ -3,14 +3,15 @@ import { ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventPublisher } from '../../src/application/ports/event-publisher';
 import { UnitOfWork } from '../../src/application/ports/repositories';
-import { SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
+import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
+import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
-import { computeWagerPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
+import { computeInboxPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
-import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, wagerBody, type ApiClient } from '../support/api-client';
-import { drain, eventually, isolatedQueues, queueUrl, sendRaw, wagerEnvelope } from '../support/sqs-helpers';
+import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, submitWager, wagerBody, type ApiClient } from '../support/api-client';
+import { drain, drainUntil, eventually, isolatedQueues, queueUrl, sendRaw, wagerEnvelope } from '../support/sqs-helpers';
 import { startTestApp, type TestApp } from '../support/test-app';
 
 const queues = isolatedQueues('messaging');
@@ -101,6 +102,27 @@ describe('consumer SQS', () => {
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
   });
 
+  test('messageId reutilizado com outra operação é conflito: ack sem efeito, nunca replay', async () => {
+    const wallet = await createWallet(api, '100.00');
+    const messageId = `msg-${newId()}`;
+    await send(messageData(wallet, { amount: '10.00' }), messageId);
+    await consumeUntilEmpty();
+
+    const conflicting = messageData(wallet, { amount: '20.00' });
+    await send(conflicting, messageId);
+    await consumeUntilEmpty();
+
+    // A segunda operação não foi persistida nem moveu saldo, e a mensagem saiu da fila sem ir para a DLQ
+    expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
+    const stored = await em.fork().execute(`select id from wager_transactions where idempotency_key = ?`, [conflicting.idempotencyKey]);
+    expect(stored).toHaveLength(0);
+    expect(await inboxCount(messageId)).toBe(1);
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+    expect(await drain(sqs, dlqUrl, 0)).toHaveLength(0);
+    const metrics = await (await fetch(`${ctx.baseUrl}/metrics`)).text();
+    expect(metrics).toMatch(/duplicates_detected_total\{source="inbox_conflict"\} [1-9]/);
+  });
+
   test('worker morto depois do commit e antes do ack: a reentrega é deduplicada', async () => {
     const wallet = await createWallet(api, '100.00');
     const data = messageData(wallet, { amount: '30.00' });
@@ -113,7 +135,7 @@ describe('consumer SQS', () => {
     await ctx.app.get(SubmitWagerTransactionUseCase).execute(command, {
       source: 'sqs',
       correlationId: messageId,
-      inbox: { consumerName: ctx.config.sqs.consumerName, messageId, payloadHash: computeWagerPayloadHash(command) },
+      inbox: { consumerName: ctx.config.sqs.consumerName, messageId, payloadHash: computeInboxPayloadHash(command) },
     });
 
     // Após o visibility timeout, outra instância recebe a mesma mensagem, detecta a duplicata e faz ack
@@ -228,6 +250,39 @@ describe('referências fora de ordem via SQS', () => {
     const events = await em.fork().execute<{ event_type: string }[]>(`select event_type from outbox_messages where aggregate_id = ? order by occurred_at`, [rows[0]!.id]);
     expect(events.map((e) => e.event_type)).toEqual(['WagerTransactionPendingReference', 'WagerTransactionRejected']);
   });
+
+  test('instâncias concorrentes reservam conjuntos disjuntos e um claim vencido não processa', async () => {
+    const wallet = await createWallet(api, '100.00');
+    const pendingIds: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const response = await submitWager(api, wagerBody({ ...wallet, kind: 'REFUND', amount: '1.00', referenceExternalTransactionId: `missing-${newId()}` }));
+      expect(response.status).toBe(202);
+      pendingIds.push(String(response.body.transactionId));
+    }
+    // Torna todas vencidas sem esperar o backoff. A data fica bem no passado porque o relógio da VM do Docker
+    // pode saltar alguns segundos para trás entre este UPDATE e o claim (que usa o Clock da aplicação).
+    await em.fork().execute(`update wager_transactions set next_attempt_at = ? where id = any(?::uuid[])`, [new Date(Date.now() - 3_600_000), `{${pendingIds.join(',')}}`]);
+
+    const other = await startTestApp(overrides);
+    try {
+      const leaseMs = ctx.config.pendingReference.leaseMs;
+      const [mine, theirs] = await Promise.all([
+        ctx.app.get(ReprocessPendingReferenceUseCase).claimDue(100, leaseMs),
+        other.app.get(ReprocessPendingReferenceUseCase).claimDue(100, leaseMs),
+      ]);
+      const mineIds = mine.map((claim) => claim.transactionId).filter((id) => pendingIds.includes(id));
+      const theirIds = theirs.map((claim) => claim.transactionId).filter((id) => pendingIds.includes(id));
+      expect(mineIds.filter((id) => theirIds.includes(id))).toEqual([]);
+      expect([...mineIds, ...theirIds].sort()).toEqual([...pendingIds].sort());
+
+      // Token antigo: o lease foi reemitido para outra instância, então o claim original não processa
+      const stale = [...mine, ...theirs].find((claim) => pendingIds.includes(claim.transactionId))!;
+      await em.fork().execute(`update wager_transactions set next_attempt_at = ? where id = ?`, [new Date(Date.now() + 60_000), stale.transactionId]);
+      expect(await ctx.app.get(ReprocessPendingReferenceUseCase).execute(stale)).toBeNull();
+    } finally {
+      await other.close();
+    }
+  });
 });
 
 describe('transactional outbox', () => {
@@ -248,9 +303,11 @@ describe('transactional outbox', () => {
     await send(messageData(wallet, { amount: '10.00' }));
     await consumeUntilEmpty();
     await publishAll([ctx.app.get(OutboxPublisherWorker)]);
-    const published = await drain(sqs, eventsUrl);
-    const types = published.map((m) => JSON.parse(m.Body ?? '{}') as { eventType: string; aggregateId: string; eventId: string; data: { walletId?: string } });
-    const forWallet = types.filter((event) => event.data.walletId === wallet.walletId);
+    const parse = (m: { Body?: string }) => JSON.parse(m.Body ?? '{}') as { eventType: string; aggregateId: string; eventId: string; data: { walletId?: string } };
+    const ofWallet = (all: { Body?: string }[]) => all.map(parse).filter((event) => event.data.walletId === wallet.walletId);
+    const published = await drainUntil(sqs, eventsUrl, (all) => ofWallet(all).length >= 4);
+    const types = published.map(parse);
+    const forWallet = ofWallet(published);
     expect(forWallet.map((event) => event.eventType).sort()).toEqual(['WagerTransactionProcessed', 'WagerTransactionProcessed', 'WalletBalanceChanged', 'WalletBalanceChanged']);
     expect(new Set(types.map((event) => event.eventId)).size).toBe(types.length);
   });
@@ -260,14 +317,49 @@ describe('transactional outbox', () => {
     try {
       const wallets = await Promise.all(Array.from({ length: 10 }, () => createWallet(api, '50.00')));
       await Promise.all(wallets.map((wallet) => api.post('/wagering/transactions', wagerBody({ ...wallet, amount: '1.00' }), { 'Idempotency-Key': newId() })));
-      const expected = await pendingOutbox();
-      expect(expected).toBeGreaterThanOrEqual(40);
+      const pendingRows = await em.fork().execute<{ id: string }[]>(`select id from outbox_messages where published_at is null`);
+      const expected = new Set(pendingRows.map((row) => row.id));
+      expect(expected.size).toBeGreaterThanOrEqual(40);
 
       await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker), ctx.app.get(OutboxPublisherWorker)]);
-      const published = await drain(sqs, eventsUrl);
-      const eventIds = published.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId);
-      expect(eventIds).toHaveLength(expected);
-      expect(new Set(eventIds).size).toBe(expected);
+      const expectedIdsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => expected.has(id));
+      const published = await drainUntil(sqs, eventsUrl, (all) => new Set(expectedIdsIn(all)).size === expected.size);
+      const eventIds = expectedIdsIn(published);
+      // Cada evento confirmado publicado exatamente uma vez
+      expect(new Set(eventIds).size).toBe(expected.size);
+      expect(eventIds).toHaveLength(expected.size);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('publishers concorrentes reservam agregados inteiros e publicam os eventos de cada wallet em ordem', async () => {
+    const other = await startTestApp(overrides);
+    try {
+      const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(api, '100.00')));
+      // Várias movimentações por wallet: os eventos de saldo precisam sair em ordem de walletVersion
+      for (let i = 0; i < 4; i++) {
+        await Promise.all(wallets.map((wallet) => submitWager(api, wagerBody({ ...wallet, amount: '1.00' }))));
+      }
+
+      // Claims concorrentes: nenhum agregado fica dividido entre dois publishers
+      const claimWith = (uow: UnitOfWork) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), 2, 500));
+      const [a, b] = await Promise.all([claimWith(ctx.app.get(UnitOfWork)), claimWith(other.app.get(UnitOfWork))]);
+      const aggregatesOf = (claimed: OutboxMessage[]) => new Set(claimed.map((message) => message.aggregateId));
+      expect([...aggregatesOf(a)].filter((id) => aggregatesOf(b).has(id))).toEqual([]);
+      await Bun.sleep(600);
+
+      await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
+      const parse = (m: { Body?: string }) => JSON.parse(m.Body ?? '{}') as { eventType: string; data: { walletId?: string; walletVersion?: number } };
+      const balanceEvents = (all: { Body?: string }[], walletId: string) =>
+        all.map(parse).filter((event) => event.eventType === 'WalletBalanceChanged' && event.data.walletId === walletId);
+      const events = (await drainUntil(sqs, eventsUrl, (all) => wallets.every((wallet) => balanceEvents(all, wallet.walletId).length >= 5))).map(parse);
+      for (const wallet of wallets) {
+        const versions = events
+          .filter((event) => event.eventType === 'WalletBalanceChanged' && event.data.walletId === wallet.walletId)
+          .map((event) => event.data.walletVersion);
+        expect(versions).toEqual([1, 2, 3, 4, 5]);
+      }
     } finally {
       await other.close();
     }
@@ -276,7 +368,7 @@ describe('transactional outbox', () => {
   test('commit confirmado e processo morto antes de publicar: outra instância publica após o lease', async () => {
     const wallet = await createWallet(api, '100.00');
     // Instância A reserva o lote (lease) e morre antes de publicar
-    const claimed = await ctx.app.get(UnitOfWork).read((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
+    const claimed = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
     expect(claimed.some((message) => message.aggregateId === wallet.walletId)).toBe(true);
 
     const other = await startTestApp(overrides);
@@ -285,8 +377,10 @@ describe('transactional outbox', () => {
       await publisher.runOnce();
       expect(await pendingOutbox()).toBe(claimed.length);
       await publishAll([publisher]);
-      const published = await drain(sqs, eventsUrl);
-      expect(published.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).sort()).toEqual(claimed.map((m) => m.id).sort());
+      const claimedIds = new Set(claimed.map((m) => m.id));
+      const claimedIdsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => claimedIds.has(id));
+      const published = await drainUntil(sqs, eventsUrl, (all) => new Set(claimedIdsIn(all)).size === claimedIds.size);
+      expect(claimedIdsIn(published).sort()).toEqual([...claimedIds].sort());
     } finally {
       await other.close();
     }
@@ -294,17 +388,45 @@ describe('transactional outbox', () => {
 
   test('publicação duplicada carrega o mesmo eventId e é deduplicável pelo consumidor', async () => {
     const wallet = await createWallet(api, '100.00');
-    const [message] = (await ctx.app.get(UnitOfWork).read((scope) => scope.outbox.claimDue(new Date(), 100, 1))).filter((m) => m.aggregateId === wallet.walletId);
+    const [message] = (await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, 1))).filter((m) => m.aggregateId === wallet.walletId);
     expect(message).toBeDefined();
     // Publica, "perde" a confirmação e publica de novo após o lease vencer
     await ctx.app.get(EventPublisher).publish([message!]);
     await Bun.sleep(20);
     await publishAll([ctx.app.get(OutboxPublisherWorker)]);
-    const published = await drain(sqs, eventsUrl);
+    const published = await drainUntil(sqs, eventsUrl, (all) => all.some((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId === message!.id));
     const ids = published.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => id === message!.id);
     // FIFO deduplica pelo MessageDeduplicationId; se não deduplicasse, as cópias teriam o mesmo eventId
     expect(ids.length).toBeGreaterThanOrEqual(1);
     expect(new Set(ids)).toEqual(new Set([message!.id]));
+  });
+});
+
+describe('shutdown do consumer', () => {
+  test('mensagem recebida depois do SIGTERM volta para a fila na hora, sem efeito e sem esperar o visibility timeout', async () => {
+    // Fila própria com visibility timeout longo: se a mensagem não fosse devolvida, ficaria invisível por 60s
+    const shutdownQueues = isolatedQueues('shutdown');
+    const instance = await startTestApp({ ...overrides, ...shutdownQueues, SQS_VISIBILITY_TIMEOUT_SECONDS: '60' });
+    try {
+      const url = await queueUrl(sqs, shutdownQueues.SQS_WAGER_QUEUE_NAME!);
+      const wallet = await createWallet(api, '100.00');
+      await sendRaw(sqs, url, JSON.stringify(wagerEnvelope(messageData(wallet, { amount: '10.00' }))), wallet.walletId);
+
+      const stopped = instance.app.get(SqsWagerConsumer);
+      await stopped.beforeApplicationShutdown();
+      expect(await stopped.pollOnce(1)).toBe(1);
+
+      const startedAt = Date.now();
+      const redelivered = await eventually(async () => {
+        const { Messages } = await sqs.send(new ReceiveMessageCommand({ QueueUrl: url, WaitTimeSeconds: 1, MessageSystemAttributeNames: ['ApproximateReceiveCount'] }));
+        return Messages?.length ? Messages : undefined;
+      }, 10_000);
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+      expect(redelivered[0]?.Attributes?.ApproximateReceiveCount).toBe('2');
+      expect(await readWalletState(em, wallet.walletId)).toMatchObject({ balance: '100.00', debits: 0 });
+    } finally {
+      await instance.close();
+    }
   });
 });
 

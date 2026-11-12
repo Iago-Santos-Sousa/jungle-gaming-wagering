@@ -14,15 +14,12 @@ import {
   type WagerPayload,
 } from '../../domain/wager-transaction/wager-transaction';
 import type { Wallet } from '../../domain/wallet/wallet';
-import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflictError, ResourceNotFoundError } from '../errors';
-import { UnitOfWork, type RepositoryScope } from '../ports/repositories';
+import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflictError, MAX_TRANSACTION_ATTEMPTS, ResourceNotFoundError } from '../errors';
+import { UnitOfWork, type PendingReferenceClaim, type RepositoryScope } from '../ports/repositories';
 import { Clock, IdGenerator, WageringMetrics, type MetricSource } from '../ports/system';
 
 // Política de tentativas para resolver referências fora de ordem (configurável por ambiente)
 export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
-
-// Tentativas totais em conflito de lock ou corrida de inserção antes de devolver erro transitório
-const MAX_TRANSACTION_ATTEMPTS = 3;
 
 export interface SubmitWagerCommand extends WagerPayload {
   idempotencyKey: string;
@@ -166,8 +163,12 @@ export class SubmitWagerTransactionUseCase {
     if (ctx.inbox) {
       const inbox = InboxMessage.receive({ ...ctx.inbox, receivedAt: now });
       inbox.markProcessed(now);
-      const fresh = await scope.inbox.tryInsert(inbox);
-      if (!fresh) {
+      const registered = await scope.inbox.register(inbox);
+      if (registered) {
+        if (!registered.matchesPayload(ctx.inbox.payloadHash)) {
+          this.metrics.duplicateDetected('inbox_conflict');
+          throw new IdempotencyConflictError('messageId already used with a different payload');
+        }
         this.metrics.duplicateDetected('inbox');
         const previous = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
         return previous ? outcomeOf(previous, true, true) : this.walletNotFound(true);
@@ -177,14 +178,15 @@ export class SubmitWagerTransactionUseCase {
     // Lock da wallet antes de olhar a idempotência: duplicatas concorrentes são serializadas aqui
     const wallet = await scope.wallets.findByIdForUpdate(command.walletId);
 
-    const existing = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
+    const matches = await scope.transactions.findIdempotencyMatches(command.idempotencyKey, command.providerId, command.externalTransactionId);
+    const existing = matches.find((match) => match.idempotencyKey === command.idempotencyKey);
     if (existing) {
       if (!existing.matchesPayload(payloadHash)) throw new IdempotencyConflictError('Idempotency-Key already used with a different payload');
       this.metrics.duplicateDetected(ctx.source);
       return outcomeOf(existing, true);
     }
-    const sameExternalId = await scope.transactions.findByProviderExternalId(command.providerId, command.externalTransactionId);
-    if (sameExternalId) throw new IdempotencyConflictError('externalTransactionId already used with a different Idempotency-Key');
+    // Sobrou só a linha com o mesmo id externo: outra key para a mesma operação do provedor
+    if (matches.length > 0) throw new IdempotencyConflictError('externalTransactionId already used with a different Idempotency-Key');
 
     // Sem wallet não há onde persistir a transação (FK): rejeição explícita, sem efeito
     if (!wallet) return this.walletNotFound(false);
@@ -219,11 +221,13 @@ export class ReprocessPendingReferenceUseCase {
     logger.setContext(ReprocessPendingReferenceUseCase.name);
   }
 
-  findDue(limit: number): Promise<string[]> {
-    return this.uow.read((scope) => scope.transactions.findDuePendingReferenceIds(this.clock.now(), limit));
+  // Reserva as vencidas para esta instância; as outras instâncias não recebem as mesmas transações
+  claimDue(limit: number, leaseMs: number): Promise<PendingReferenceClaim[]> {
+    return this.uow.read((scope) => scope.transactions.claimDuePendingReferences(this.clock.now(), limit, leaseMs));
   }
 
-  async execute(transactionId: string): Promise<WagerTransactionStatus | null> {
+  async execute(claim: PendingReferenceClaim): Promise<WagerTransactionStatus | null> {
+    const { transactionId } = claim;
     const transaction = await withConflictRetry(this.metrics, 'pending-reference', () =>
       this.uow.transactional(async (scope) => {
         const snapshot = await scope.transactions.findById(transactionId);
@@ -232,10 +236,10 @@ export class ReprocessPendingReferenceUseCase {
         // Mesma ordem de locks do fluxo de submissão (wallet e depois transação), sem risco de deadlock
         const wallet = await scope.wallets.findByIdForUpdate(snapshot.walletId);
         const locked = await scope.transactions.findByIdForUpdate(transactionId);
-        const now = this.clock.now();
-        // Outra instância já decidiu ou a próxima tentativa ainda não venceu
+        // Outra instância já decidiu
         if (!wallet || locked?.status !== WagerTransactionStatus.PendingReference) return null;
-        if (locked.nextAttemptAt && locked.nextAttemptAt.getTime() > now.getTime()) return null;
+        // Token do claim mudou: o lease venceu e outra instância reservou, ou a linha foi antecipada. Fica para o próximo ciclo.
+        if (locked.nextAttemptAt?.getTime() !== claim.claimedUntil.getTime()) return null;
 
         await this.writer.settle(scope, locked, wallet, false, { correlationId: locked.id, causationId: locked.id });
         return locked;

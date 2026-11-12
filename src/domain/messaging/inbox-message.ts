@@ -33,6 +33,11 @@ export class InboxMessage {
     return this._processedAt;
   }
 
+  // Mesmo messageId com conteúdo diferente é conflito, não reentrega
+  matchesPayload(payloadHash: string): boolean {
+    return this.payloadHash === payloadHash;
+  }
+
   isProcessed(): boolean {
     return this._processedAt !== undefined;
   }

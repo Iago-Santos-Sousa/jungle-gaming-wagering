@@ -4,13 +4,14 @@ import { PinoLogger } from 'nestjs-pino';
 import {
   ApplicationError,
   ConcurrencyConflictError,
+  DuplicateTransactionError,
   IdempotencyConflictError,
   InvalidCursorError,
   ResourceNotFoundError,
   WalletAlreadyExistsError,
 } from '../../../application/errors';
 import { DomainError, InvalidTransactionStateError } from '../../../domain/shared/domain-error';
-import { isTransientDatabaseError } from '../../../infrastructure/database/database-errors';
+import { isPermanentDatabaseError, isTransientDatabaseError } from '../../../infrastructure/database/database-errors';
 
 export interface ErrorBody {
   code: string;
@@ -78,8 +79,13 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (exception instanceof InvalidCursorError) {
       return { status: HttpStatus.BAD_REQUEST, body: body('VALIDATION_ERROR', exception.message, ['cursor: invalid']) };
     }
-    if (exception instanceof ConcurrencyConflictError || isTransientDatabaseError(exception)) {
+    // Corrida de inserção que esgotou as tentativas também é transitória: reenviar com a mesma key vira replay ou conflito
+    if (exception instanceof ConcurrencyConflictError || exception instanceof DuplicateTransactionError || isTransientDatabaseError(exception)) {
       return { status: HttpStatus.SERVICE_UNAVAILABLE, body: body('SERVICE_UNAVAILABLE', 'Temporary failure, retry with the same Idempotency-Key') };
+    }
+    // Falha permanente conhecida (dado inválido para o banco, integridade, transição ilegal): reenviar não resolve
+    if (isPermanentDatabaseError(exception) || exception instanceof InvalidTransactionStateError) {
+      return { status: HttpStatus.INTERNAL_SERVER_ERROR, body: body('PERMANENT_FAILURE', 'Permanent failure, do not retry this request unchanged') };
     }
     // Violação de contrato detectada pelo domínio (ex.: REFUND sem referência) é payload inválido
     if (exception instanceof DomainError && !(exception instanceof InvalidTransactionStateError)) {

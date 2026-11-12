@@ -1,6 +1,7 @@
 import { Inject, Injectable, type BeforeApplicationShutdown, type OnApplicationBootstrap } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 import { ConcurrencyConflictError } from '../../application/errors';
+import type { PendingReferenceClaim } from '../../application/ports/repositories';
 import { PublishOutboxUseCase } from '../../application/use-cases/publish-outbox.use-case';
 import { ReprocessPendingReferenceUseCase } from '../../application/use-cases/wager-use-cases';
 import { APP_CONFIG, type AppConfig } from '../../infrastructure/config/app-config';
@@ -63,17 +64,18 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, BeforeApp
   }
 
   async runOnce(): Promise<boolean> {
-    const { batchSize } = this.config.pendingReference;
-    const ids = await this.reprocess.findDue(batchSize);
-    for (let start = 0; start < ids.length; start += PENDING_REFERENCE_CONCURRENCY) {
-      await Promise.all(ids.slice(start, start + PENDING_REFERENCE_CONCURRENCY).map((id) => this.reprocessOne(id)));
+    const { batchSize, leaseMs } = this.config.pendingReference;
+    const claims = await this.reprocess.claimDue(batchSize, leaseMs);
+    for (let start = 0; start < claims.length; start += PENDING_REFERENCE_CONCURRENCY) {
+      await Promise.all(claims.slice(start, start + PENDING_REFERENCE_CONCURRENCY).map((claim) => this.reprocessOne(claim)));
     }
-    return ids.length === batchSize;
+    return claims.length === batchSize;
   }
 
-  private async reprocessOne(transactionId: string): Promise<void> {
+  private async reprocessOne(claim: PendingReferenceClaim): Promise<void> {
+    const { transactionId } = claim;
     try {
-      await this.reprocess.execute(transactionId);
+      await this.reprocess.execute(claim);
     } catch (error) {
       // Transitório: fica para o próximo ciclo. Permanente: FAILED auditável em vez de tentar para sempre.
       if (error instanceof ConcurrencyConflictError || isTransientDatabaseError(error)) {

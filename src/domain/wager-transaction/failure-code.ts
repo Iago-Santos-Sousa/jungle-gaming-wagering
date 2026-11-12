@@ -22,6 +22,8 @@ export enum FailureCode {
   ReferenceAlreadyReversed = 'REFERENCE_ALREADY_REVERSED',
   // Valor da reversão diferente do valor da referência
   AmountMismatch = 'AMOUNT_MISMATCH',
+  // Crédito levaria o saldo além do limite armazenável. Reenviar igual não muda o resultado.
+  BalanceLimitExceeded = 'BALANCE_LIMIT_EXCEEDED',
   // Erro permanente de infraestrutura registrado para auditoria
   InternalError = 'INTERNAL_ERROR',
 }

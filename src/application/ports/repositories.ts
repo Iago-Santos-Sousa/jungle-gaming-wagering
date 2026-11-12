@@ -15,16 +15,25 @@ export interface WalletRepository {
   update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
+export interface PendingReferenceClaim {
+  transactionId: string;
+  claimedUntil: Date;
+}
+
 export interface WagerTransactionRepository {
   findById(id: string): Promise<WagerTransaction | null>;
   findByIdForUpdate(id: string): Promise<WagerTransaction | null>;
   findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | null>;
   findByProviderExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
+  // Uma única consulta pelas duas chaves únicas de idempotência; devolve no máximo 2 transações
+  findIdempotencyMatches(idempotencyKey: string, providerId: string, externalTransactionId: string): Promise<WagerTransaction[]>;
   hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
   // Lança DuplicateTransactionError quando a idempotency key ou o id externo já existem
   insert(transaction: WagerTransaction): Promise<void>;
   update(transaction: WagerTransaction): Promise<void>;
-  findDuePendingReferenceIds(now: Date, limit: number): Promise<string[]>;
+  // Reserva transações PENDING_REFERENCE vencidas (FOR UPDATE SKIP LOCKED) empurrando next_attempt_at para o fim do lease.
+  // O claimedUntil devolvido funciona como token: só quem reservou processa enquanto o valor não mudar.
+  claimDuePendingReferences(now: Date, limit: number, leaseMs: number): Promise<PendingReferenceClaim[]>;
   // Antecipa a próxima tentativa das transações que aguardam esta referência na mesma wallet
   expeditePendingDependents(walletId: string, providerId: string, referenceExternalTransactionId: string, now: Date): Promise<number>;
 }
@@ -50,14 +59,15 @@ export interface LedgerRepository {
 }
 
 export interface InboxRepository {
-  // Retorna false se a mensagem já foi registrada (duplicata)
-  tryInsert(message: InboxMessage): Promise<boolean>;
+  // Registra a mensagem. Retorna null se for nova, ou o registro já existente se for duplicata.
+  register(message: InboxMessage): Promise<InboxMessage | null>;
 }
 
 export interface OutboxRepository {
   add(messages: readonly OutboxMessage[]): Promise<void>;
-  // Reserva mensagens vencidas com lease (FOR UPDATE SKIP LOCKED), sem segurar transação aberta.
-  // now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
+  // Reserva com lease todas as mensagens pendentes de agregados cuja mensagem mais antiga está vencida e livre.
+  // Um agregado fica com um único publisher por vez, o que preserva a ordem por agregado. Exige transação (FOR UPDATE).
+  // Devolve em ordem de publicação. now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
   claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]>;
   // Marca o lote publicado com um único UPDATE
   markPublished(messages: readonly OutboxMessage[]): Promise<void>;

@@ -100,6 +100,11 @@ export type ReferenceCheck =
   | { outcome: 'invalid'; failureCode: FailureCode };
 
 // Hash canônico do payload de negócio (algoritmo documentado no ARCHITECTURE.md)
+// Hash do inbox: conteúdo de negócio mais a Idempotency-Key, para detectar messageId reutilizado com outra operação
+export function computeInboxPayloadHash(payload: WagerPayload & { idempotencyKey: string }): string {
+  return hashPayload({ idempotencyKey: payload.idempotencyKey, wagerPayloadHash: computeWagerPayloadHash(payload) });
+}
+
 export function computeWagerPayloadHash(payload: WagerPayload): string {
   return hashPayload({
     providerId: payload.providerId,

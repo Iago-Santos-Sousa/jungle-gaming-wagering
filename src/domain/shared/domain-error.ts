@@ -31,6 +31,15 @@ export class InsufficientFundsError extends DomainError {
   }
 }
 
+// Crédito que levaria o saldo além do que a persistência consegue representar
+export class BalanceLimitExceededError extends DomainError {
+  readonly code = 'BALANCE_LIMIT_EXCEEDED';
+
+  constructor() {
+    super('Balance limit exceeded');
+  }
+}
+
 // Tentativa de transição a partir de um estado terminal: erro de programação, não de negócio
 export class InvalidTransactionStateError extends DomainError {
   readonly code = 'INVALID_TRANSACTION_STATE';

@@ -50,10 +50,15 @@ afterAll(async () => {
 describe('migrations', () => {
   test('são reversíveis: down remove o schema e up recria', async () => {
     const migrator = ctx.orm.migrator;
+    // Só a última: a coluna de sequência some e a tabela continua
     await migrator.down();
+    const sequenceColumn = `select count(*)::int as n from information_schema.columns where table_name = 'outbox_messages' and column_name = 'sequence'`;
+    expect((await em.execute<{ n: number }[]>(sequenceColumn))[0]?.n).toBe(0);
+    await migrator.down({ to: 0 });
     const afterDown = await em.execute(`select to_regclass('public.wallets') as t`);
     expect(afterDown[0]?.t).toBeNull();
     await migrator.up();
+    expect((await em.execute<{ n: number }[]>(sequenceColumn))[0]?.n).toBe(1);
     const tables = await em.execute<{ table_name: string }[]>(
       `select table_name from information_schema.tables where table_schema = 'public' and table_name <> 'mikro_orm_migrations' order by table_name`,
     );

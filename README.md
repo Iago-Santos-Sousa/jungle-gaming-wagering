@@ -133,6 +133,7 @@ Códigos HTTP do `POST /wagering/transactions`:
 | `409` | Mesma key (ou mesmo `externalTransactionId`) com payload diferente | Não |
 | `422` | Rejeitada por regra de negócio (`failureCode`) | Não muda o resultado |
 | `503` | Falha transitória (header `Retry-After`) | Sim, com a mesma key |
+| `500` | `PERMANENT_FAILURE` (falha permanente conhecida) ou `INTERNAL_ERROR` (inesperada) | Não sem correção |
 
 ## Enviando mensagens pela fila
 
@@ -163,6 +164,7 @@ Todas têm default; a lista completa e comentada está em [.env.example](.env.ex
 | `DB_LOCK_TIMEOUT_MS` | `5000` | Espera máxima pelo lock de uma wallet antes de virar erro transitório |
 | `SQS_MAX_RECEIVES` | `5` | Entregas antes de a mensagem ir para a DLQ |
 | `PENDING_REFERENCE_MAX_ATTEMPTS` | `10` | Tentativas de resolver uma referência antes de `REFERENCE_NOT_FOUND` |
+| `PENDING_REFERENCE_LEASE_MS` | `30000` | Lease de um lote de referências pendentes reservado por uma instância |
 | `OUTBOX_LEASE_MS` | `30000` | Lease de um lote reservado pelo publisher |
 
 ## Estrutura

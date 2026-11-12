@@ -1,5 +1,5 @@
 import { Global, Inject, Injectable, Module, type OnApplicationShutdown } from '@nestjs/common';
-import { GetQueueUrlCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { GetQueueAttributesCommand, GetQueueUrlCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { APP_CONFIG, type AppConfig } from '../config/app-config';
 
 export const SQS_CLIENT = Symbol('SQS_CLIENT');
@@ -30,6 +30,12 @@ export class SqsQueueResolver {
     // Falha não fica em cache, para a próxima chamada tentar de novo
     pending.catch(() => this.urls.delete(queueName));
     return pending;
+  }
+
+  // Verificação de alcance usada pelo readiness: sempre faz uma chamada real ao SQS, mesmo com a URL em cache
+  async ping(queueName: string): Promise<void> {
+    const QueueUrl = await this.getUrl(queueName);
+    await this.client.send(new GetQueueAttributesCommand({ QueueUrl, AttributeNames: ['QueueArn'] }));
   }
 
   private async resolve(queueName: string): Promise<string> {

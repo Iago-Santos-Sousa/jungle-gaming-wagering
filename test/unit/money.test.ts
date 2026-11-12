@@ -7,10 +7,10 @@ const brl = (amount: string) => Money.from({ amount, currency: 'BRL' });
 describe('Money', () => {
   describe('escala e serialização', () => {
     test.each([
-      ['25', '25.00'],
-      ['25.5', '25.50'],
+      ['25.00', '25.00'],
+      ['25.50', '25.50'],
       ['25.05', '25.05'],
-      ['0', '0.00'],
+      ['0.00', '0.00'],
       ['0.01', '0.01'],
       ['999999999999999999.99', '999999999999999999.99'],
     ])('"%s" serializa como "%s"', (input, expected) => {
@@ -35,7 +35,7 @@ describe('Money', () => {
   });
 
   describe('entradas inválidas', () => {
-    test.each(['NaN', 'Infinity', '-Infinity', '1e3', '1E3', '', ' ', '10.', '.5', '-1.00', '+1.00', '01.00', '1,00', ' 1.00', '1.00 ', '0x10', '1000000000000000000.00'])(
+    test.each(['25', '25.5', '0', '0.0', 'NaN', 'Infinity', '-Infinity', '1e3', '1E3', '', ' ', '10.', '.5', '-1.00', '+1.00', '01.00', '1,00', ' 1.00', '1.00 ', '0x10', '1000000000000000000.00'])(
       'rejeita "%s"',
       (amount) => {
         expect(() => brl(amount)).toThrow(InvalidArgumentError);
@@ -67,7 +67,8 @@ describe('Money', () => {
       expect(brl('0.00').isZero()).toBe(true);
       expect(brl('0.01').isPositive()).toBe(true);
       expect(brl('9.99').isLessThan(brl('10.00'))).toBe(true);
-      expect(brl('10.0').equals(brl('10.00'))).toBe(true);
+      expect(brl('10.00').equals(brl('10.00'))).toBe(true);
+      expect(brl('10.00').equals(brl('10.01'))).toBe(false);
     });
 
     test('rehydrate aceita valores assinados vindos do banco', () => {

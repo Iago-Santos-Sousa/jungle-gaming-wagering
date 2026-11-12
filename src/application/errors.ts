@@ -30,6 +30,10 @@ export class ResourceNotFoundError extends ApplicationError {
   }
 }
 
+// Tentativas totais em conflito de lock ou corrida de inserção antes de devolver erro transitório.
+// Também entra no orçamento de tempo do shutdown (ver loadConfig).
+export const MAX_TRANSACTION_ATTEMPTS = 3;
+
 // Escrita perdeu a corrida de versão; transitório, pode ser reenviado
 export class ConcurrencyConflictError extends ApplicationError {
   readonly code = 'CONCURRENCY_CONFLICT';

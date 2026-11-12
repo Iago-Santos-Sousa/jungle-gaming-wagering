@@ -22,10 +22,28 @@ export class SqsEventPublisher extends EventPublisher {
 
   async publish(messages: readonly OutboxMessage[]): Promise<PublishResult> {
     const result: PublishResult = { published: [], failed: [] };
-    for (let start = 0; start < messages.length; start += SQS_BATCH_LIMIT) {
-      const chunk = messages.slice(start, start + SQS_BATCH_LIMIT);
+    // Agregados com falha neste ciclo: os eventos seguintes deles esperam a próxima tentativa
+    const blocked = new Set<string>();
+    let pending: OutboxMessage[] = [];
+
+    const flush = async (): Promise<void> => {
+      if (pending.length === 0) return;
+      const chunk = pending;
+      pending = [];
+      const failedBefore = result.failed.length;
       await this.publishChunk(chunk, result);
+      for (const { message } of result.failed.slice(failedBefore)) blocked.add(message.aggregateId);
+    };
+
+    for (const message of messages) {
+      if (blocked.has(message.aggregateId)) {
+        result.failed.push({ message, error: 'blocked: an earlier event of this aggregate failed' });
+        continue;
+      }
+      pending.push(message);
+      if (pending.length === SQS_BATCH_LIMIT) await flush();
     }
+    await flush();
     return result;
   }
 

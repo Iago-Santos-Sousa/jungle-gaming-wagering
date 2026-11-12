@@ -11,7 +11,7 @@ x-app-env: &app-env
   PORT: ${PORT:-3000}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
-  SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-20000}
+  SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-30000}
   DB_HOST: wagering-postgres
   DB_PORT: 5432
   DB_NAME: ${DB_NAME:-wagering}
@@ -32,7 +32,7 @@ x-app-env: &app-env
   SQS_CONSUMER_NAME: ${SQS_CONSUMER_NAME:-wager-transactions-consumer}
   SQS_MAX_RECEIVES: ${SQS_MAX_RECEIVES:-5}
   SQS_VISIBILITY_TIMEOUT_SECONDS: ${SQS_VISIBILITY_TIMEOUT_SECONDS:-30}
-  SQS_WAIT_TIME_SECONDS: ${SQS_WAIT_TIME_SECONDS:-20}
+  SQS_WAIT_TIME_SECONDS: ${SQS_WAIT_TIME_SECONDS:-10}
   SQS_BATCH_SIZE: ${SQS_BATCH_SIZE:-10}
   SQS_RETRY_BASE_DELAY_SECONDS: ${SQS_RETRY_BASE_DELAY_SECONDS:-2}
   SQS_RETRY_MAX_DELAY_SECONDS: ${SQS_RETRY_MAX_DELAY_SECONDS:-300}
@@ -44,6 +44,7 @@ x-app-env: &app-env
   PENDING_REFERENCE_POLL_INTERVAL_MS: ${PENDING_REFERENCE_POLL_INTERVAL_MS:-1000}
   PENDING_REFERENCE_BATCH_SIZE: ${PENDING_REFERENCE_BATCH_SIZE:-50}
   PENDING_REFERENCE_MAX_ATTEMPTS: ${PENDING_REFERENCE_MAX_ATTEMPTS:-10}
+  PENDING_REFERENCE_LEASE_MS: ${PENDING_REFERENCE_LEASE_MS:-30000}
   PENDING_REFERENCE_BASE_DELAY_MS: ${PENDING_REFERENCE_BASE_DELAY_MS:-1000}
   PENDING_REFERENCE_MAX_DELAY_MS: ${PENDING_REFERENCE_MAX_DELAY_MS:-300000}
 
@@ -100,7 +101,7 @@ services:
     image: jungle-gaming-wagering:local
     restart: unless-stopped
     init: true
-    stop_grace_period: 30s
+    stop_grace_period: 35s
     environment: *app-env
     ports:
       - "${API_HOST_PORT:-3000}:3000"
@@ -112,7 +113,7 @@ services:
     image: jungle-gaming-wagering:local
     restart: unless-stopped
     init: true
-    stop_grace_period: 30s
+    stop_grace_period: 35s
     environment: *app-env
     deploy:
       replicas: ${WORKER_REPLICAS:-2}

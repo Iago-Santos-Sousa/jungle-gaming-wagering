@@ -13,7 +13,8 @@ export interface OutboxPublishOptions {
 }
 
 // Publica eventos confirmados da outbox. Vários publishers podem rodar ao mesmo tempo:
-// o claim com lease e SKIP LOCKED entrega lotes disjuntos, e um lease vencido volta a ficar disponível.
+// o claim reserva agregados inteiros com lease e SKIP LOCKED, então cada agregado tem um único publisher por vez
+// e seus eventos saem em ordem. Um lease vencido volta a ficar disponível.
 @Injectable()
 export class PublishOutboxUseCase {
   constructor(
@@ -29,7 +30,8 @@ export class PublishOutboxUseCase {
 
   // Retorna quantos eventos foram publicados neste ciclo
   async publishBatch(options: OutboxPublishOptions): Promise<number> {
-    const claimed = await this.uow.read((scope) => scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs));
+    // Transação curta só para o claim: o lock das cabeças segura o agregado até o lease ficar visível
+    const claimed = await this.uow.transactional((scope) => scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs));
     if (claimed.length === 0) return 0;
 
     // Publicação fora de transação: nenhuma conexão fica presa esperando o broker

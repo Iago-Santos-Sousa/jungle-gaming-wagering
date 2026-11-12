@@ -12,23 +12,26 @@ import { ConcurrencyConflictError, IdempotencyConflictError } from '../../applic
 import { WageringMetrics } from '../../application/ports/system';
 import { SubmitWagerTransactionUseCase } from '../../application/use-cases/wager-use-cases';
 import { Money } from '../../domain/money/money';
-import { InvalidArgumentError } from '../../domain/shared/domain-error';
+import { InvalidArgumentError, InvalidTransactionStateError } from '../../domain/shared/domain-error';
 import { RetryPolicy } from '../../domain/shared/retry-policy';
-import { computeWagerPayloadHash } from '../../domain/wager-transaction/wager-transaction';
+import { computeInboxPayloadHash } from '../../domain/wager-transaction/wager-transaction';
 import { APP_CONFIG, type AppConfig } from '../../infrastructure/config/app-config';
-import { isTransientDatabaseError } from '../../infrastructure/database/database-errors';
+import { isPermanentDatabaseError, isTransientDatabaseError } from '../../infrastructure/database/database-errors';
 import { SQS_CLIENT, SqsQueueResolver } from '../../infrastructure/messaging/sqs.module';
 import { parseWagerMessage, type WagerTransactionMessageDto } from './wager-message.dto';
 
-type DeadLetterReason = 'invalid_message' | 'retries_exhausted';
+type DeadLetterReason = 'invalid_message' | 'permanent_error' | 'retries_exhausted';
 
 // Consumidor de wager-transactions.fifo. Reaproveita o mesmo use case da entrada HTTP.
 // Negócio: ack. Transitório: devolve com backoff. Permanente ou tentativas esgotadas: DLQ.
 @Injectable()
 export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private running = false;
+  // Shutdown pedido: nada novo começa, e o que for recebido daqui em diante volta para a fila na hora
+  private stopping = false;
   private loop: Promise<void> | undefined;
-  private abort = new AbortController();
+  // Mensagens em processamento, para devolver a visibilidade se o shutdown estourar o tempo
+  private readonly inFlight = new Set<Message>();
   private readonly retryPolicy: RetryPolicy;
 
   constructor(
@@ -49,18 +52,25 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     this.loop = this.run();
   }
 
-  // SIGTERM: para de receber, conclui o que já começou e devolve a visibilidade do que não começou
+  // SIGTERM: para de receber, conclui o que já começou e devolve a visibilidade do que não começou.
+  // O receive em andamento não é abortado: abortar a resposta poderia descartar mensagens já entregues pelo broker,
+  // que ficariam invisíveis até o visibility timeout. Ele termina em até SQS_WAIT_TIME_SECONDS e o lote volta para a fila.
   async beforeApplicationShutdown(): Promise<void> {
+    this.stopping = true;
     if (!this.running) return;
     this.running = false;
-    this.abort.abort();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => resolve('timeout'), this.config.shutdownTimeoutMs);
     });
     const result = await Promise.race([this.loop, timeout]);
     clearTimeout(timer);
-    if (result === 'timeout') this.logger.warn('shutdown timeout reached with messages in flight; they will be redelivered');
+    if (result !== 'timeout') return;
+
+    // Ainda com o cliente SQS vivo: devolve o que está em andamento. Se o commit acontecer depois, o inbox descarta a reentrega.
+    const pending = [...this.inFlight];
+    await Promise.all(pending.map((message) => this.release(message)));
+    this.logger.warn({ released: pending.length }, 'shutdown timeout reached; in-flight messages released for redelivery');
   }
 
   // Um ciclo de recebimento e processamento; usado pelo laço e pelos testes
@@ -84,22 +94,16 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
 
   private async receive(waitTimeSeconds: number): Promise<Message[]> {
     const QueueUrl = await this.queues.getUrl(this.config.sqs.wagerQueueName);
-    try {
-      const { Messages } = await this.client.send(
-        new ReceiveMessageCommand({
-          QueueUrl,
-          MaxNumberOfMessages: this.config.sqs.batchSize,
-          WaitTimeSeconds: waitTimeSeconds,
-          MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
-          MessageAttributeNames: ['All'],
-        }),
-        { abortSignal: this.abort.signal },
-      );
-      return Messages ?? [];
-    } catch (error) {
-      if (this.abort.signal.aborted) return [];
-      throw error;
-    }
+    const { Messages } = await this.client.send(
+      new ReceiveMessageCommand({
+        QueueUrl,
+        MaxNumberOfMessages: this.config.sqs.batchSize,
+        WaitTimeSeconds: waitTimeSeconds,
+        MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
+        MessageAttributeNames: ['All'],
+      }),
+    );
+    return Messages ?? [];
   }
 
   // Grupos FIFO em paralelo; mensagens do mesmo grupo em ordem
@@ -112,11 +116,16 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     await Promise.all(
       [...groups.values()].map(async (group) => {
         for (const message of group) {
-          if (this.abort.signal.aborted) {
+          if (this.stopping) {
             await this.release(message);
             continue;
           }
-          await this.handle(message);
+          this.inFlight.add(message);
+          try {
+            await this.handle(message);
+          } finally {
+            this.inFlight.delete(message);
+          }
         }
       }),
     );
@@ -140,7 +149,7 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
         source: 'sqs',
         correlationId: envelope.messageId,
         causationId: envelope.messageId,
-        inbox: { consumerName: this.config.sqs.consumerName, messageId: envelope.messageId, payloadHash: computeWagerPayloadHash(command) },
+        inbox: { consumerName: this.config.sqs.consumerName, messageId: envelope.messageId, payloadHash: computeInboxPayloadHash(command) },
       });
       // Ack somente depois do commit (o use case já retornou)
       await this.ack(message);
@@ -163,6 +172,11 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     // Contrato violado detectado pelo domínio: permanente
     if (error instanceof InvalidArgumentError) {
       await this.deadLetter(message, 'invalid_message', error);
+      return;
+    }
+    // Dado inválido para o banco, violação de integridade ou transição ilegal: reenviar nunca resolve
+    if (isPermanentDatabaseError(error) || error instanceof InvalidTransactionStateError) {
+      await this.deadLetter(message, 'permanent_error', error);
       return;
     }
     if (receiveCount >= this.config.sqs.maxReceives) {

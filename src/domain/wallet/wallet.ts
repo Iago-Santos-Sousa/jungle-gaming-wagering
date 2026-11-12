@@ -1,6 +1,6 @@
 import { LedgerDirection } from '../ledger/ledger-direction';
 import { Money } from '../money/money';
-import { CurrencyMismatchError, InsufficientFundsError, InvalidArgumentError } from '../shared/domain-error';
+import { BalanceLimitExceededError, CurrencyMismatchError, InsufficientFundsError, InvalidArgumentError } from '../shared/domain-error';
 
 export interface WalletState {
   id: string;
@@ -93,6 +93,7 @@ export class Wallet {
     const balanceBefore = this._balance;
     const balanceAfter = direction === LedgerDirection.Debit ? balanceBefore.subtract(money) : balanceBefore.add(money);
     if (balanceAfter.isNegative()) throw new InsufficientFundsError();
+    if (balanceAfter.exceedsStorageLimit()) throw new BalanceLimitExceededError();
 
     this._balance = balanceAfter;
     this._version += 1;
