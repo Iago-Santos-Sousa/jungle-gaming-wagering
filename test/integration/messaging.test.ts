@@ -6,7 +6,7 @@ import { UnitOfWork } from '../../src/application/ports/repositories';
 import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
 import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
-import { computeInboxPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
+import { computeInboxPayloadHash, computeWagerPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
@@ -121,6 +121,29 @@ describe('consumer SQS', () => {
     expect(await drain(sqs, dlqUrl, 0)).toHaveLength(0);
     const metrics = await (await fetch(`${ctx.baseUrl}/metrics`)).text();
     expect(metrics).toMatch(/duplicates_detected_total\{source="inbox_conflict"\} [1-9]/);
+  });
+
+  test('inbox gravado com o hash legado (sem Idempotency-Key): reentrega é duplicata, não conflito', async () => {
+    const inboxConflicts = async () => {
+      const metrics = await (await fetch(`${ctx.baseUrl}/metrics`)).text();
+      return Number(/duplicates_detected_total\{source="inbox_conflict"\} (\d+)/.exec(metrics)?.[1] ?? 0);
+    };
+    const wallet = await createWallet(api, '100.00');
+    const data = messageData(wallet, { amount: '10.00' });
+    const messageId = `msg-${newId()}`;
+    await send(data, messageId);
+    await consumeUntilEmpty();
+
+    // Simula uma linha gravada pela versão anterior, que guardava só o hash de negócio
+    const command = { ...data, kind: data.kind as SubmittableKind, money: Money.from(data.money) };
+    await em.fork().execute(`update inbox_messages set payload_hash = ? where message_id = ?`, [computeWagerPayloadHash(command), messageId]);
+    const conflictsBefore = await inboxConflicts();
+
+    await send(data, messageId);
+    await consumeUntilEmpty();
+    expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
+    expect(await inboxConflicts()).toBe(conflictsBefore);
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
   });
 
   test('worker morto depois do commit e antes do ack: a reentrega é deduplicada', async () => {

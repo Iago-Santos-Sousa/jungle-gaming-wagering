@@ -165,7 +165,11 @@ export class SubmitWagerTransactionUseCase {
       inbox.markProcessed(now);
       const registered = await scope.inbox.register(inbox);
       if (registered) {
-        if (!registered.matchesPayload(ctx.inbox.payloadHash)) {
+        // Compatibilidade: linhas gravadas antes do hash do inbox incluir a Idempotency-Key guardam só o hash de negócio
+        // (payloadHash). Os dois formatos não colidem, então a detecção de conflito continua valendo.
+        // Pode sair depois que a janela de redelivery das mensagens antigas tiver passado.
+        const sameMessage = registered.matchesPayload(ctx.inbox.payloadHash) || registered.matchesPayload(payloadHash);
+        if (!sameMessage) {
           this.metrics.duplicateDetected('inbox_conflict');
           throw new IdempotencyConflictError('messageId already used with a different payload');
         }
