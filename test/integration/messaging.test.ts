@@ -114,7 +114,6 @@ describe('consumer SQS', () => {
     await send(conflicting, messageId);
     await consumeUntilEmpty();
 
-    // A segunda operação não foi persistida nem moveu saldo, e a mensagem saiu da fila sem ir para a DLQ
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
     const stored = await em.fork().execute(`select id from wager_transactions where idempotency_key = ?`, [conflicting.idempotencyKey]);
     expect(stored).toHaveLength(0);
@@ -206,7 +205,6 @@ describe('consumer SQS', () => {
 
     release();
     await holder;
-    // A mensagem volta após o backoff de visibilidade e é aplicada uma única vez
     await eventually(async () => {
       await consumer.pollOnce(0);
       return (await readWalletState(em, wallet.walletId)).debits === 1;
@@ -359,7 +357,6 @@ describe('transactional outbox', () => {
       const expectedIdsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => expected.has(id));
       const published = await drainUntil(sqs, eventsUrl, (all) => new Set(expectedIdsIn(all)).size === expected.size);
       const eventIds = expectedIdsIn(published);
-      // Cada evento confirmado publicado exatamente uma vez
       expect(new Set(eventIds).size).toBe(expected.size);
       expect(eventIds).toHaveLength(expected.size);
     } finally {
@@ -404,7 +401,6 @@ describe('transactional outbox', () => {
   // Bem no passado: imune a saltos do relógio da VM do Docker, que podem deixar "agora" segundos atrás do que foi gravado
   const longAgo = () => new Date(Date.now() - 3_600_000);
 
-  // Vence (next_attempt_at) ou expira (locked_until) linhas sem esperar o relógio
   async function makeDue(ids: readonly string[]): Promise<void> {
     await em.fork().execute(`update outbox_messages set next_attempt_at = ? where id = any(?::uuid[])`, [longAgo(), `{${ids.join(',')}}`]);
   }
@@ -412,7 +408,6 @@ describe('transactional outbox', () => {
     await em.fork().execute(`update outbox_messages set locked_until = ? where id = any(?::uuid[])`, [longAgo(), `{${ids.join(',')}}`]);
   }
 
-  // Deixa pendentes só os eventos de saldo da wallet (os demais agregados do cenário são marcados como publicados)
   async function walletWithOnlyBalanceEventsPending(bets: number): Promise<{ walletId: string; pendingIds: string[] }> {
     await publishAll([ctx.app.get(OutboxPublisherWorker)]);
     const wallet = await createWallet(api, '100.00');
@@ -433,7 +428,6 @@ describe('transactional outbox', () => {
     try {
       const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(api, '100.00')));
       let betting = true;
-      // Publishers rodando enquanto as apostas inserem eventos nas mesmas wallets
       const publishing = (async () => {
         while (betting) await Promise.all([ctx.app.get(OutboxPublisherWorker).runOnce(), other.app.get(OutboxPublisherWorker).runOnce()]);
       })();
@@ -454,7 +448,6 @@ describe('transactional outbox', () => {
       );
       expect(violations).toEqual([]);
 
-      // E tudo acaba publicado em ordem por wallet
       await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
     } finally {
       await other.close();
@@ -471,7 +464,6 @@ describe('transactional outbox', () => {
     // A cabeça reservada barra o agregado: as 5 restantes não são entregues a outro publisher
     expect((await claimOutbox(uow, 50, 30_000)).messages).toEqual([]);
 
-    // Liberado o lease, o próximo claim continua do mesmo ponto, em ordem
     await uow.read((scope) => scope.outbox.releaseLease(first.messages, first.leaseUntil));
     const all = await claimOutbox(uow, 50, 30_000);
     expect(all.messages.map((message) => message.id)).toEqual(pendingIds);
@@ -583,7 +575,6 @@ describe('transactional outbox', () => {
       const worker = small.app.get(OutboxPublisherWorker);
       expect(await worker.runOnce()).toBe(true);
       expect(await worker.runOnce()).toBe(true);
-      // Restou 1 de 5
       expect(await worker.runOnce()).toBe(false);
       expect(await worker.runOnce()).toBe(false);
     } finally {
@@ -600,10 +591,8 @@ describe('transactional outbox', () => {
     const other = await startTestApp(overrides);
     try {
       const publisher = other.app.get(OutboxPublisherWorker);
-      // Com o lease válido, outra instância não publica nada
       await publisher.runOnce();
       expect(await pendingOutbox()).toBe(claimed.length);
-      // O lease vence e a outra instância assume
       await expireLeases(claimed.map((message) => message.id));
       await publishAll([publisher]);
       const claimedIds = new Set(claimed.map((m) => m.id));
@@ -702,7 +691,6 @@ describe('recuperação após reinício', () => {
 
     const first = await startTestApp({ ...overrides, WORKERS_ENABLED: 'true' });
     await eventually(async () => (await readWalletState(em, wallet.walletId)).debits > 0, 20_000, 20);
-    // SIGTERM: o consumer termina o que começou e devolve o resto
     await first.close();
 
     const second = await startTestApp({ ...overrides, WORKERS_ENABLED: 'true' });

@@ -11,7 +11,6 @@ import { PollingLoop } from './polling-loop';
 // Transações pendentes reprocessadas em paralelo por ciclo (cada uma trava só a própria wallet)
 const PENDING_REFERENCE_CONCURRENCY = 5;
 
-// Publica a outbox em ciclos. Várias instâncias podem rodar juntas sem publicar o mesmo lote ao mesmo tempo.
 @Injectable()
 export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private readonly loop: PollingLoop;
@@ -42,7 +41,6 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeAppl
   }
 }
 
-// Reprocessa transações PENDING_REFERENCE vencidas, com backoff exponencial definido no domínio
 @Injectable()
 export class PendingReferenceWorker implements OnApplicationBootstrap, BeforeApplicationShutdown {
   private readonly loop: PollingLoop;

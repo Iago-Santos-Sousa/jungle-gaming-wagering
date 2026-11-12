@@ -7,7 +7,6 @@ import { WagerTransaction, type WagerTransactionKind, type WagerTransactionStatu
 import { Wallet } from '../../domain/wallet/wallet';
 import type { LedgerEntryRow, OutboxMessageRow, WagerTransactionRow, WalletRow } from './entities';
 
-// Conversões explícitas entre registros do banco e entidades de domínio (reidratação sem revalidar transições)
 
 const money = (amount: string, currency: string): Money => Money.rehydrate({ amount, currency: currency.trim() });
 

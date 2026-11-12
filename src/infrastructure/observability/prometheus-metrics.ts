@@ -69,7 +69,6 @@ export class PrometheusWageringMetrics extends WageringMetrics {
     super();
     collectDefaultMetrics({ register: this.registry });
 
-    // Calculado no momento da coleta: idade da mensagem pendente mais antiga da outbox
     new Gauge({
       name: 'outbox_lag_seconds',
       help: 'Idade em segundos do evento mais antigo ainda não publicado',

@@ -20,10 +20,8 @@ export interface ErrorBody {
   correlationId: string;
 }
 
-// Segundos sugeridos ao cliente antes de reenviar em falha transitória
 const RETRY_AFTER_SECONDS = '1';
 
-// Erro de validação de payload com a lista de violações, no mesmo formato em todos os endpoints
 export class RequestValidationError extends BadRequestException {
   constructor(readonly details: string[]) {
     super('Request validation failed');

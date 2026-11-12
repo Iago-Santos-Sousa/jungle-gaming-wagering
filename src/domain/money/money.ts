@@ -24,7 +24,6 @@ type MoneyDecimal = InstanceType<typeof MoneyDecimal>;
 // Menor valor absoluto que não cabe mais em numeric(20,2)
 const STORAGE_LIMIT = new MoneyDecimal(10).pow(MAX_INTEGER_DIGITS);
 
-// Value object monetário imutável com escala fixa de 2 casas
 export class Money {
   private constructor(
     private readonly value: MoneyDecimal,
@@ -88,7 +87,6 @@ export class Money {
     return this.value.lessThan(other.value);
   }
 
-  // Resultado de uma operação que passou dos 18 dígitos inteiros aceitos pelo banco
   exceedsStorageLimit(): boolean {
     return this.value.abs().greaterThanOrEqualTo(STORAGE_LIMIT);
   }

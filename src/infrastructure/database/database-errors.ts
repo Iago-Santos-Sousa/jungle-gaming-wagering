@@ -10,11 +10,12 @@ const TRANSIENT_SQLSTATES = new Set([
   '57P02', // crash_shutdown
   '57P03', // cannot_connect_now
   '53300', // too_many_connections
+  // connection_exception e variações (classe 08)
   '08000',
   '08001',
   '08003',
   '08004',
-  '08006', // connection_exception e variações
+  '08006',
 ]);
 
 const LOCK_CONFLICT_SQLSTATES = new Set(['40001', '40P01', '55P03']);
@@ -53,7 +54,6 @@ export function isLockConflict(error: unknown): boolean {
   return state !== undefined && LOCK_CONFLICT_SQLSTATES.has(state);
 }
 
-// Nome da constraint violada, quando o erro é de unicidade
 export function uniqueViolationConstraint(error: unknown): string | undefined {
   if (!(error instanceof UniqueConstraintViolationException)) return undefined;
   const constraint = (error as UniqueConstraintViolationException & { constraint?: unknown }).constraint;

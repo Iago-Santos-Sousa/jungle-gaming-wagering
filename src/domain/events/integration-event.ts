@@ -7,7 +7,6 @@ export interface IntegrationEventProps<T> {
   data: T;
 }
 
-// Contexto comum a todos os eventos gerados numa mesma operação
 export interface EventContext {
   newEventId: () => string;
   correlationId: string;
@@ -47,7 +46,6 @@ export abstract class IntegrationEvent<T> {
     this.data = Object.freeze({ ...props.data });
   }
 
-  /** Envelope serializado gravado no payload da outbox. */
   toJSON(): IntegrationEventEnvelope<T> {
     return {
       eventId: this.eventId,

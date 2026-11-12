@@ -28,7 +28,6 @@ export class SqsEventPublisher extends EventPublisher {
   // diferentes não têm ordem entre si. As rodadas seguem em sequência.
   async publish(messages: readonly OutboxMessage[], options: PublishOptions = {}): Promise<PublishResult> {
     const result: PublishResult = { published: [], failed: [], skipped: [] };
-    // Fila de cada agregado, na ordem recebida (sequence)
     const queues = new Map<string, OutboxMessage[]>();
     for (const message of messages) {
       const queue = queues.get(message.aggregateId);

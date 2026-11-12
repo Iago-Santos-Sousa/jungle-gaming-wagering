@@ -8,7 +8,6 @@ import { createQueues } from '../../src/scripts/create-queues';
 
 export const TEST_DB_NAME = process.env.TEST_DB_NAME ?? 'wagering_test';
 
-// Configuração de teste: banco próprio, filas próprias e workers desligados por padrão
 export function testConfig(overrides: Partial<Record<string, string>> = {}): AppConfig {
   return loadConfig({
     ...process.env,
@@ -47,7 +46,6 @@ async function withAdminClient<T>(config: AppConfig, work: (client: Client) => P
 
 let prepared: Promise<void> | undefined;
 
-// Recria o banco de teste e as filas uma vez por execução da suíte, partindo de um estado limpo
 export function prepareTestEnvironment(): Promise<void> {
   prepared ??= (async () => {
     const config = testConfig();
@@ -73,7 +71,6 @@ export interface TestApp {
   close: () => Promise<void>;
 }
 
-// Sobe uma instância real da aplicação (HTTP, ORM, SQS) contra PostgreSQL e MiniStack
 export async function startTestApp(overrides: Partial<Record<string, string>> = {}): Promise<TestApp> {
   await prepareTestEnvironment();
   const config = testConfig(overrides);

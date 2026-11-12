@@ -1,4 +1,3 @@
-// Erros da camada de aplicação. Cada um mapeia para um status HTTP e uma decisão de reenvio distintos.
 
 export abstract class ApplicationError extends Error {
   abstract readonly code: string;
@@ -44,7 +43,6 @@ export class DuplicateTransactionError extends ApplicationError {
   readonly code = 'DUPLICATE_TRANSACTION';
 }
 
-// Cursor de paginação ilegível ou adulterado
 export class InvalidCursorError extends ApplicationError {
   readonly code = 'INVALID_CURSOR';
 

@@ -6,7 +6,6 @@ import type { Wallet } from '../../domain/wallet/wallet';
 import type { LedgerEntryResponse, LedgerPageResponse, ReconciliationResponse, WalletResponse } from './dto/wallet.dto';
 import type { WagerTransactionResponse, WagerTransactionResultResponse } from './dto/wager.dto';
 
-// Serialização de saída: dinheiro como MoneyProps e datas em ISO-8601 UTC
 
 export function presentWallet(wallet: Wallet): WalletResponse {
   return { id: wallet.id, playerId: wallet.playerId, balance: wallet.balance.toJSON(), version: wallet.version };

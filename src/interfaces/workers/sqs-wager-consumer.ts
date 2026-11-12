@@ -76,7 +76,6 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     this.logger.warn({ released: pending.length }, 'shutdown timeout reached; in-flight messages released for redelivery');
   }
 
-  // Um ciclo de recebimento e processamento; usado pelo laço e pelos testes
   async pollOnce(waitTimeSeconds = this.config.sqs.waitTimeSeconds): Promise<number> {
     const messages = await this.receive(waitTimeSeconds);
     await this.processBatch(messages);
@@ -216,7 +215,7 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
       .catch((error: unknown) => this.logger.warn({ err: error, sqsMessageId: message.MessageId }, 'change visibility failed'));
   }
 
-  // Devolve a mensagem para a fila imediatamente (shutdown antes de começar a processá-la)
+  // Devolve a mensagem para a fila imediatamente: no shutdown, antes de processá-la ou quando o tempo de espera estoura com ela em andamento
   private release(message: Message): Promise<void> {
     return this.changeVisibility(message, 0);
   }

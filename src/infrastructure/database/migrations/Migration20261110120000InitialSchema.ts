@@ -4,7 +4,6 @@ import { Migration } from '@mikro-orm/migrations';
 // no banco, e não só no código da aplicação.
 export class Migration20261110120000InitialSchema extends Migration {
   override async up(): Promise<void> {
-    // ---- wallets
     this.addSql(`
       create table wallets (
         id uuid primary key,
@@ -22,7 +21,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         constraint wallets_version_ck check (version >= 1)
       )`);
 
-    // ---- wager_transactions
     this.addSql(`
       create table wager_transactions (
         id uuid primary key,
@@ -109,7 +107,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         before update or delete on wager_transactions
         for each row execute function wager_transactions_guard()`);
 
-    // ---- wallet_ledger_entries
     this.addSql(`
       create table wallet_ledger_entries (
         id uuid primary key,
@@ -198,7 +195,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         deferrable initially deferred
         for each row execute function wallets_ledger_consistency()`);
 
-    // ---- inbox_messages
     this.addSql(`
       create table inbox_messages (
         consumer_name varchar(128) not null,
@@ -209,7 +205,6 @@ export class Migration20261110120000InitialSchema extends Migration {
         constraint inbox_messages_pk primary key (consumer_name, message_id)
       )`);
 
-    // ---- outbox_messages
     this.addSql(`
       create table outbox_messages (
         id uuid primary key,

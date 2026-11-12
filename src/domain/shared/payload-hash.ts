@@ -14,7 +14,6 @@ export function canonicalJson(value: CanonicalValue | undefined): string {
   return `{${entries.join(',')}}`;
 }
 
-// SHA-256 em hexadecimal do JSON canônico
 export function hashPayload(value: CanonicalValue): string {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 }

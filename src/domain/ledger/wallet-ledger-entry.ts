@@ -17,7 +17,6 @@ export interface CreateLedgerEntryProps {
 
 export type LedgerEntryState = CreateLedgerEntryProps;
 
-// Lançamento imutável do ledger: sem campos mutáveis e sem métodos de transição
 export class WalletLedgerEntry {
   private constructor(
     public readonly id: string,
@@ -69,13 +68,11 @@ export class WalletLedgerEntry {
     );
   }
 
-  /** balanceBefore ± money === balanceAfter. Verificada na factory. */
   isBalanced(): boolean {
     const expected = this.direction === LedgerDirection.Credit ? this.balanceBefore.add(this.money) : this.balanceBefore.subtract(this.money);
     return expected.equals(this.balanceAfter);
   }
 
-  // Efeito assinado no saldo: positivo para crédito, negativo para débito
   signedAmount(): Money {
     return this.direction === LedgerDirection.Credit ? this.money : this.money.negate();
   }

@@ -4,7 +4,6 @@ import { LedgerPageResponse, ReconciliationResponse, WalletResponse, CreateWalle
 import { ErrorResponse, SubmitWagerTransactionDto, WagerTransactionResponse, WagerTransactionResultResponse } from '../dto/wager.dto';
 import { CommonExamples, WagerExamples, WalletExamples } from './examples';
 
-// Decorators de documentação compostos, para manter os controllers limpos
 
 const errorResponse = (status: HttpStatus, description: string, example: object) =>
   ApiResponse({ status, description, type: ErrorResponse, content: { 'application/json': { example } } });

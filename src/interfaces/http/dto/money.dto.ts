@@ -15,7 +15,6 @@ export class MoneyDto implements MoneyProps {
   currency!: string;
 }
 
-// Contrato monetário de saída: sempre com escala fixa de 2 casas
 export class MoneyResponse implements MoneyProps {
   @ApiProperty({ example: '975.00' })
   amount!: string;

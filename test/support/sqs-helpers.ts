@@ -26,7 +26,6 @@ export async function sendRaw(client: SQSClient, url: string, body: string, grou
   await client.send(new SendMessageCommand({ QueueUrl: url, MessageBody: body, MessageGroupId: groupId, MessageDeduplicationId: newId() }));
 }
 
-// Lê e remove todas as mensagens visíveis de uma fila
 export async function drain(client: SQSClient, url: string, waitTimeSeconds = 1): Promise<Message[]> {
   const all: Message[] = [];
   for (;;) {
@@ -63,7 +62,6 @@ export function bySendOrder(messages: readonly Message[]): Message[] {
   return [...messages].sort((a, b) => BigInt(a.Attributes?.SequenceNumber ?? '0') < BigInt(b.Attributes?.SequenceNumber ?? '0') ? -1 : 1);
 }
 
-// Repete a verificação até passar ou estourar o tempo
 export async function eventually<T>(probe: () => Promise<T | undefined | false>, timeoutMs = 20_000, intervalMs = 200): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
