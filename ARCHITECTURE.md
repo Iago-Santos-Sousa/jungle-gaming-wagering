@@ -138,7 +138,7 @@ Consistentes em todos os endpoints. O corpo de erro é sempre `{ code, message, 
 | 409 | `IDEMPOTENCY_KEY_CONFLICT` ou `WALLET_ALREADY_EXISTS` |
 | 422 | Rejeição de negócio (corpo com `status: REJECTED` e `failureCode`) |
 | 202 | Aceita com processamento pendente (`PENDING_REFERENCE`) |
-| 503 `SERVICE_UNAVAILABLE` | Falha transitória (lock, banco fora, timeout), com `Retry-After` |
+| 503 `SERVICE_UNAVAILABLE` | Falha transitória (lock, corrida de inserção na mesma key, banco fora, timeout), com `Retry-After` |
 | 500 `INTERNAL_ERROR` | Falha inesperada |
 
 ## 7. Referências fora de ordem

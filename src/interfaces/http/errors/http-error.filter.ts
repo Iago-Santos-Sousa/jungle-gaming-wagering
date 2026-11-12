@@ -4,6 +4,7 @@ import { PinoLogger } from 'nestjs-pino';
 import {
   ApplicationError,
   ConcurrencyConflictError,
+  DuplicateTransactionError,
   IdempotencyConflictError,
   InvalidCursorError,
   ResourceNotFoundError,
@@ -78,7 +79,8 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (exception instanceof InvalidCursorError) {
       return { status: HttpStatus.BAD_REQUEST, body: body('VALIDATION_ERROR', exception.message, ['cursor: invalid']) };
     }
-    if (exception instanceof ConcurrencyConflictError || isTransientDatabaseError(exception)) {
+    // Corrida de inserção que esgotou as tentativas também é transitória: reenviar com a mesma key vira replay ou conflito
+    if (exception instanceof ConcurrencyConflictError || exception instanceof DuplicateTransactionError || isTransientDatabaseError(exception)) {
       return { status: HttpStatus.SERVICE_UNAVAILABLE, body: body('SERVICE_UNAVAILABLE', 'Temporary failure, retry with the same Idempotency-Key') };
     }
     // Violação de contrato detectada pelo domínio (ex.: REFUND sem referência) é payload inválido
