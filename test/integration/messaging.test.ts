@@ -3,13 +3,13 @@ import { ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventPublisher } from '../../src/application/ports/event-publisher';
 import { UnitOfWork } from '../../src/application/ports/repositories';
-import { SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
+import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
 import { Money } from '../../src/domain/money/money';
 import { computeInboxPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
-import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, wagerBody, type ApiClient } from '../support/api-client';
+import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, submitWager, wagerBody, type ApiClient } from '../support/api-client';
 import { drain, eventually, isolatedQueues, queueUrl, sendRaw, wagerEnvelope } from '../support/sqs-helpers';
 import { startTestApp, type TestApp } from '../support/test-app';
 
@@ -248,6 +248,38 @@ describe('referências fora de ordem via SQS', () => {
     expect(rows[0]).toMatchObject({ failure_code: 'REFERENCE_NOT_FOUND', reference_attempts: ctx.config.pendingReference.maxAttempts - 1 });
     const events = await em.fork().execute<{ event_type: string }[]>(`select event_type from outbox_messages where aggregate_id = ? order by occurred_at`, [rows[0]!.id]);
     expect(events.map((e) => e.event_type)).toEqual(['WagerTransactionPendingReference', 'WagerTransactionRejected']);
+  });
+
+  test('instâncias concorrentes reservam conjuntos disjuntos e um claim vencido não processa', async () => {
+    const wallet = await createWallet(api, '100.00');
+    const pendingIds: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const response = await submitWager(api, wagerBody({ ...wallet, kind: 'REFUND', amount: '1.00', referenceExternalTransactionId: `missing-${newId()}` }));
+      expect(response.status).toBe(202);
+      pendingIds.push(String(response.body.transactionId));
+    }
+    // Torna todas vencidas agora, sem esperar o backoff
+    await em.fork().execute(`update wager_transactions set next_attempt_at = now() - interval '1 second' where id = any(?::uuid[])`, [`{${pendingIds.join(',')}}`]);
+
+    const other = await startTestApp(overrides);
+    try {
+      const leaseMs = ctx.config.pendingReference.leaseMs;
+      const [mine, theirs] = await Promise.all([
+        ctx.app.get(ReprocessPendingReferenceUseCase).claimDue(100, leaseMs),
+        other.app.get(ReprocessPendingReferenceUseCase).claimDue(100, leaseMs),
+      ]);
+      const mineIds = mine.map((claim) => claim.transactionId).filter((id) => pendingIds.includes(id));
+      const theirIds = theirs.map((claim) => claim.transactionId).filter((id) => pendingIds.includes(id));
+      expect(mineIds.filter((id) => theirIds.includes(id))).toEqual([]);
+      expect([...mineIds, ...theirIds].sort()).toEqual([...pendingIds].sort());
+
+      // Token antigo: o lease foi reemitido para outra instância, então o claim original não processa
+      const stale = [...mine, ...theirs].find((claim) => pendingIds.includes(claim.transactionId))!;
+      await em.fork().execute(`update wager_transactions set next_attempt_at = now() + interval '1 minute' where id = ?`, [stale.transactionId]);
+      expect(await ctx.app.get(ReprocessPendingReferenceUseCase).execute(stale)).toBeNull();
+    } finally {
+      await other.close();
+    }
   });
 });
 

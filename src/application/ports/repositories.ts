@@ -15,6 +15,11 @@ export interface WalletRepository {
   update(wallet: Wallet, expectedVersion: number): Promise<void>;
 }
 
+export interface PendingReferenceClaim {
+  transactionId: string;
+  claimedUntil: Date;
+}
+
 export interface WagerTransactionRepository {
   findById(id: string): Promise<WagerTransaction | null>;
   findByIdForUpdate(id: string): Promise<WagerTransaction | null>;
@@ -26,7 +31,9 @@ export interface WagerTransactionRepository {
   // Lança DuplicateTransactionError quando a idempotency key ou o id externo já existem
   insert(transaction: WagerTransaction): Promise<void>;
   update(transaction: WagerTransaction): Promise<void>;
-  findDuePendingReferenceIds(now: Date, limit: number): Promise<string[]>;
+  // Reserva transações PENDING_REFERENCE vencidas (FOR UPDATE SKIP LOCKED) empurrando next_attempt_at para o fim do lease.
+  // O claimedUntil devolvido funciona como token: só quem reservou processa enquanto o valor não mudar.
+  claimDuePendingReferences(now: Date, limit: number, leaseMs: number): Promise<PendingReferenceClaim[]>;
   // Antecipa a próxima tentativa das transações que aguardam esta referência na mesma wallet
   expeditePendingDependents(walletId: string, providerId: string, referenceExternalTransactionId: string, now: Date): Promise<number>;
 }

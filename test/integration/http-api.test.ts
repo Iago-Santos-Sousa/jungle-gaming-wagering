@@ -220,8 +220,10 @@ describe('POST /wagering/transactions', () => {
     expect((await submitWager(api, refund)).status).toBe(202);
 
     await submitWager(api, wagerBody({ ...wallet, amount: '40.00', externalTransactionId: betId }));
-    const status = await ctx.app.get(ReprocessPendingReferenceUseCase).execute(String(pending.body.transactionId));
-    expect(status).toBe(WagerTransactionStatus.Processed);
+    const reprocess = ctx.app.get(ReprocessPendingReferenceUseCase);
+    const claim = (await reprocess.claimDue(100, ctx.config.pendingReference.leaseMs)).find((c) => c.transactionId === pending.body.transactionId);
+    expect(claim).toBeDefined();
+    expect(await reprocess.execute(claim!)).toBe(WagerTransactionStatus.Processed);
 
     const replay = await submitWager(api, refund);
     expect(replay.status).toBe(200);

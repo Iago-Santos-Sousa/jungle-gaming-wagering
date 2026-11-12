@@ -47,7 +47,7 @@ export interface AppConfig {
   database: DatabaseConfig;
   sqs: SqsConfig;
   outbox: RetryConfig & { pollIntervalMs: number; batchSize: number; leaseMs: number };
-  pendingReference: RetryConfig & { pollIntervalMs: number; batchSize: number; maxAttempts: number };
+  pendingReference: RetryConfig & { pollIntervalMs: number; batchSize: number; maxAttempts: number; leaseMs: number };
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
@@ -138,6 +138,8 @@ export function loadConfig(env: Env = process.env): AppConfig {
       pollIntervalMs: readInt(env, 'PENDING_REFERENCE_POLL_INTERVAL_MS', 1_000, 1),
       batchSize: readInt(env, 'PENDING_REFERENCE_BATCH_SIZE', 50, 1),
       maxAttempts: readInt(env, 'PENDING_REFERENCE_MAX_ATTEMPTS', 10, 1),
+      // Tempo em que um lote reservado fica exclusivo da instância antes de voltar a ficar disponível
+      leaseMs: readInt(env, 'PENDING_REFERENCE_LEASE_MS', 30_000, 1),
       baseDelayMs: readInt(env, 'PENDING_REFERENCE_BASE_DELAY_MS', 1_000, 1),
       maxDelayMs: readInt(env, 'PENDING_REFERENCE_MAX_DELAY_MS', 300_000, 1),
     },

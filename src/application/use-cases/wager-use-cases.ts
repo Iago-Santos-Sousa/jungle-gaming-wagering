@@ -15,7 +15,7 @@ import {
 } from '../../domain/wager-transaction/wager-transaction';
 import type { Wallet } from '../../domain/wallet/wallet';
 import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflictError, ResourceNotFoundError } from '../errors';
-import { UnitOfWork, type RepositoryScope } from '../ports/repositories';
+import { UnitOfWork, type PendingReferenceClaim, type RepositoryScope } from '../ports/repositories';
 import { Clock, IdGenerator, WageringMetrics, type MetricSource } from '../ports/system';
 
 // Política de tentativas para resolver referências fora de ordem (configurável por ambiente)
@@ -224,11 +224,13 @@ export class ReprocessPendingReferenceUseCase {
     logger.setContext(ReprocessPendingReferenceUseCase.name);
   }
 
-  findDue(limit: number): Promise<string[]> {
-    return this.uow.read((scope) => scope.transactions.findDuePendingReferenceIds(this.clock.now(), limit));
+  // Reserva as vencidas para esta instância; as outras instâncias não recebem as mesmas transações
+  claimDue(limit: number, leaseMs: number): Promise<PendingReferenceClaim[]> {
+    return this.uow.read((scope) => scope.transactions.claimDuePendingReferences(this.clock.now(), limit, leaseMs));
   }
 
-  async execute(transactionId: string): Promise<WagerTransactionStatus | null> {
+  async execute(claim: PendingReferenceClaim): Promise<WagerTransactionStatus | null> {
+    const { transactionId } = claim;
     const transaction = await withConflictRetry(this.metrics, 'pending-reference', () =>
       this.uow.transactional(async (scope) => {
         const snapshot = await scope.transactions.findById(transactionId);
@@ -237,10 +239,10 @@ export class ReprocessPendingReferenceUseCase {
         // Mesma ordem de locks do fluxo de submissão (wallet e depois transação), sem risco de deadlock
         const wallet = await scope.wallets.findByIdForUpdate(snapshot.walletId);
         const locked = await scope.transactions.findByIdForUpdate(transactionId);
-        const now = this.clock.now();
-        // Outra instância já decidiu ou a próxima tentativa ainda não venceu
+        // Outra instância já decidiu
         if (!wallet || locked?.status !== WagerTransactionStatus.PendingReference) return null;
-        if (locked.nextAttemptAt && locked.nextAttemptAt.getTime() > now.getTime()) return null;
+        // Token do claim mudou: o lease venceu e outra instância reservou, ou a linha foi antecipada. Fica para o próximo ciclo.
+        if (locked.nextAttemptAt?.getTime() !== claim.claimedUntil.getTime()) return null;
 
         await this.writer.settle(scope, locked, wallet, false, { correlationId: locked.id, causationId: locked.id });
         return locked;

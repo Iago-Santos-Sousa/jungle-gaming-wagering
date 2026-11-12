@@ -7,6 +7,7 @@ import type {
   LedgerRepository,
   LedgerSummary,
   OutboxRepository,
+  PendingReferenceClaim,
   RepositoryScope,
   WagerTransactionRepository,
   WalletRepository,
@@ -134,13 +135,24 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
     );
   }
 
-  async findDuePendingReferenceIds(now: Date, limit: number): Promise<string[]> {
-    const rows = await this.em.find(
-      WagerTransactionRecord,
-      { status: WagerTransactionStatus.PendingReference, nextAttemptAt: { $lte: now } },
-      { fields: ['id'], orderBy: { nextAttemptAt: 'asc' }, limit },
+  async claimDuePendingReferences(now: Date, limit: number, leaseMs: number): Promise<PendingReferenceClaim[]> {
+    const claimedUntil = new Date(now.getTime() + leaseMs);
+    // SKIP LOCKED: instâncias concorrentes pegam conjuntos disjuntos, e o lease vencido torna a linha disponível de novo.
+    // Usa o índice parcial de next_attempt_at em PENDING_REFERENCE.
+    const rows = await this.em.execute<{ id: string }[]>(
+      `update wager_transactions t
+          set next_attempt_at = ?
+        where t.id in (
+          select id from wager_transactions
+           where status = 'PENDING_REFERENCE'
+             and next_attempt_at <= ?
+           order by next_attempt_at
+           limit ?
+           for update skip locked)
+       returning t.id`,
+      [claimedUntil, now, limit],
     );
-    return rows.map((row) => row.id);
+    return rows.map((row) => ({ transactionId: row.id, claimedUntil }));
   }
 
   async expeditePendingDependents(walletId: string, providerId: string, referenceExternalTransactionId: string, now: Date): Promise<number> {
