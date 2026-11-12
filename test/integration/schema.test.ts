@@ -50,7 +50,12 @@ afterAll(async () => {
 describe('migrations', () => {
   test('são reversíveis: down remove o schema e up recria', async () => {
     const migrator = ctx.orm.migrator;
-    // Só a última: a coluna de sequência some e a tabela continua
+    const sequenceUnique = `select count(*)::int as n from pg_constraint where conname = 'outbox_messages_sequence_uq'`;
+    expect((await em.execute<{ n: number }[]>(sequenceUnique))[0]?.n).toBe(0);
+    // Desfaz a remoção do UNIQUE redundante: a constraint volta
+    await migrator.down();
+    expect((await em.execute<{ n: number }[]>(sequenceUnique))[0]?.n).toBe(1);
+    // Desfaz a sequência: a coluna some e a tabela continua
     await migrator.down();
     const sequenceColumn = `select count(*)::int as n from information_schema.columns where table_name = 'outbox_messages' and column_name = 'sequence'`;
     expect((await em.execute<{ n: number }[]>(sequenceColumn))[0]?.n).toBe(0);
@@ -59,6 +64,7 @@ describe('migrations', () => {
     expect(afterDown[0]?.t).toBeNull();
     await migrator.up();
     expect((await em.execute<{ n: number }[]>(sequenceColumn))[0]?.n).toBe(1);
+    expect((await em.execute<{ n: number }[]>(sequenceUnique))[0]?.n).toBe(0);
     const tables = await em.execute<{ table_name: string }[]>(
       `select table_name from information_schema.tables where table_schema = 'public' and table_name <> 'mikro_orm_migrations' order by table_name`,
     );
