@@ -37,7 +37,8 @@ export class PublishOutboxUseCase {
     logger.setContext(PublishOutboxUseCase.name);
   }
 
-  // shouldStop: pedido de shutdown; o publisher para entre rodadas e o ciclo confirma antes de o ORM fechar
+  // shouldStop: pedido de shutdown; o publisher para entre rodadas e o ciclo confirma antes de o ORM fechar.
+  // O mesmo corte vale quando metade do lease já passou.
   async publishBatch(options: OutboxPublishOptions, shouldStop?: () => boolean): Promise<OutboxPublishCycle> {
     // Transação curta só para o claim: o lock das cabeças segura o agregado até o lease ficar visível
     const { leaseUntil, messages: claimed } = await this.uow.transactional((scope) =>
@@ -45,8 +46,13 @@ export class PublishOutboxUseCase {
     );
     if (claimed.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
+    // Nenhuma rodada começa depois da metade do lease: com o broker lento, um agregado com muitos eventos levaria
+    // mais que o lease, e outro publisher assumiria a cabeça ainda não confirmada enquanto este envia os seguintes
+    const roundDeadline = leaseUntil.getTime() - options.leaseMs / 2;
+    const stop = () => shouldStop?.() === true || this.clock.now().getTime() >= roundDeadline;
+
     // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed, skipped } = await this.publisher.publish(claimed, { shouldStop });
+    const { published, failed, skipped } = await this.publisher.publish(claimed, { shouldStop: stop });
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
