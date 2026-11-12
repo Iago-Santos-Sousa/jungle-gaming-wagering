@@ -71,7 +71,7 @@ Cenário obrigatório (saldo 100.00, duas apostas de 80.00 simultâneas) e a mes
 | `wager_transactions` | `UNIQUE (idempotency_key)`; `UNIQUE (provider_id, external_transaction_id)`; CHECKs de kind, status, moeda, valor, referência obrigatória para REFUND/ROLLBACK, `failure_code` presente se e somente se REJECTED/FAILED, PROCESSED com `processed_at` e saldo observado; índice único parcial: uma reversão PROCESSED por referência; trigger: estado terminal imutável, campos de identidade imutáveis, exclusão proibida |
 | `wallet_ledger_entries` | Append-only (trigger bloqueia UPDATE, DELETE e TRUNCATE); `UNIQUE (transaction_id)` (no máximo um lançamento por transação); `UNIQUE (wallet_id, wallet_version)`; CHECK aritmético `balance_after = balance_before ± amount`; `amount > 0`; saldos não negativos; FK composta `(wallet_id, currency)` garante a moeda da wallet e `(transaction_id, wallet_id)` garante que a transação é da mesma wallet |
 | `inbox_messages` | PK `(consumer_name, message_id)` |
-| `outbox_messages` | Índice parcial em `next_attempt_at WHERE published_at IS NULL` |
+| `outbox_messages` | Índices parciais em `next_attempt_at` e em `(aggregate_id, sequence)` `WHERE published_at IS NULL`; `sequence` identity e única (ordem de publicação, migration `Migration20261112120000OutboxSequence`) |
 
 Índices de consulta: `wager_transactions (wallet_id, created_at)`, índice parcial da fila de `PENDING_REFERENCE` por `next_attempt_at` e por `(provider_id, reference_external_transaction_id)`. A paginação do ledger usa o índice único `(wallet_id, wallet_version)`.
 
@@ -179,8 +179,10 @@ Transação, saldo, ledger, inbox (quando a entrada é SQS) e eventos são grava
 O `OutboxPublisherWorker` roda em todas as instâncias:
 
 1. **Claim por agregado com lease**, numa transação curta de dois statements:
-   - trava com `FOR UPDATE SKIP LOCKED` a **cabeça** (mensagem pendente mais antiga, por `occurred_at, id`, via `DISTINCT ON (aggregate_id)`) de até `n` agregados vencidos e sem lease válido;
-   - aplica o lease (`locked_until = now + lease`) a **todas** as pendentes desses agregados e devolve em ordem de `occurred_at, id` (o UUIDv7 desempata eventos do mesmo commit).
+   - trava com `FOR UPDATE SKIP LOCKED` a **cabeça** (menor `sequence` pendente, via `DISTINCT ON (aggregate_id)`) de até `n` agregados vencidos e sem lease válido;
+   - aplica o lease (`locked_until = now + lease`) a **todas** as pendentes desses agregados e devolve em ordem de `sequence`.
+
+   `sequence` é uma coluna `bigint generated always as identity`, atribuída pelo banco no insert. O insert acontece com a wallet travada, então a sequência é monotônica por agregado na ordem de commit. A ordem nunca usa `occurred_at`: ele vem do relógio da aplicação, que pode andar para trás (os testes pegaram um `walletVersion` 5 publicado antes do 1 depois de uma ressincronização do relógio da VM do Docker).
 
    Cada agregado fica com um único publisher por vez, então dois publishers nunca publicam eventos da mesma wallet em paralelo e fora de ordem. O `FOR UPDATE` reavalia o lease na versão mais recente da linha: um agregado que outro publisher acabou de reservar fica de fora. A transação termina antes da publicação, sem conexão presa esperando o broker.
 2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos (`MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`), na ordem do claim. Depois da primeira falha de um agregado, os eventos seguintes dele não são enviados e voltam para nova tentativa junto com o que falhou. A cabeça com backoff segura o agregado inteiro e preserva a ordem.
@@ -245,8 +247,8 @@ O "crash depois do commit" é simulado de forma determinística: o teste recebe 
 
 - **Throughput por wallet** limitado pelo lock pessimista. Uma wallet muito quente serializa suas operações; o paralelismo entre wallets não é afetado.
 - **Emulador**: o LocalStack passou a exigir conta e token em 2026, então o projeto usa o MiniStack, alternativa aceita pelo enunciado. O long polling dele tem granularidade de cerca de 5s; por isso os testes usam short polling. O limite de entregas e a DLQ ficam na aplicação para não depender da fidelidade do emulador.
-- **Ordem da outbox dentro de um mesmo `SendMessageBatch`**: se uma entrada falha e uma posterior do mesmo agregado no mesmo lote é aceita pelo broker, essa posterior já foi publicada. É raro (falha parcial por entrada) e o consumidor ainda tem `walletVersion` em `WalletBalanceChanged` como defesa. O `DISTINCT ON` da cabeça percorre as pendentes; com outbox drenada isso é pequeno, e um índice `(aggregate_id, occurred_at, id) WHERE published_at IS NULL` seria o próximo passo se a fila pendente crescer.
-- **Relógio**: leases e agendamentos dependem de relógios sincronizados entre as instâncias da aplicação (NTP em produção). O lease de 30s tolera desvios pequenos.
+- **Ordem da outbox dentro de um mesmo `SendMessageBatch`**: se uma entrada falha e uma posterior do mesmo agregado no mesmo lote é aceita pelo broker, essa posterior já foi publicada. É raro (falha parcial por entrada) e o consumidor ainda tem `walletVersion` em `WalletBalanceChanged` como defesa. O `DISTINCT ON` da cabeça usa o índice parcial `(aggregate_id, sequence) WHERE published_at IS NULL`, que só contém as pendentes.
+- **Relógio**: leases e agendamentos dependem de relógios sincronizados entre as instâncias da aplicação (NTP em produção). O lease de 30s tolera desvios pequenos. Um salto do relógio para trás só prolonga leases e backoffs (nada é processado duas vezes, porque o claim de referência pendente usa `next_attempt_at` como token e a outbox trava a cabeça de cada agregado). No Docker Desktop, a VM pode ficar segundos atrás do host e ser ressincronizada com saltos; por isso os testes de integração esperam pelos eventos do próprio teste (`drainUntil`) em vez de confiar no primeiro receive vazio do emulador.
 - **Métricas por instância**: cada processo expõe as suas; a agregação seria feita pelo Prometheus. `outbox_lag_seconds` e `dlq_depth` são globais porque vêm do banco e da fila.
 - **Consumidor de eventos** fora do escopo: os eventos ficam em `wagering-events.fifo`, prontos para consumo com deduplicação por `eventId`.
 - **Inbox e outbox crescem** sem limpeza. Em produção, um job removeria registros publicados ou processados mais antigos que a janela de redelivery.

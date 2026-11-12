@@ -250,6 +250,8 @@ interface RawOutboxRow {
   locked_until: Date | null;
   published_at: Date | null;
   last_error: string | null;
+  // bigint chega como string pelo driver pg
+  sequence: string;
 }
 
 function fromRawOutbox(row: RawOutboxRow): OutboxMessageRow {
@@ -276,7 +278,7 @@ class MikroOrmOutboxRepository implements OutboxRepository {
   }
 
   async claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]> {
-    // 1) Trava a cabeça (mensagem pendente mais antiga) de até `limit` agregados vencidos e livres.
+    // 1) Trava a cabeça (menor sequence pendente) de até `limit` agregados vencidos e livres.
     //    SKIP LOCKED faz publishers concorrentes pegarem agregados diferentes; o FOR UPDATE reavalia o lease
     //    na versão mais recente da linha, então um agregado reservado por outro publisher que já confirmou fica de fora.
     const heads = await this.em.execute<{ aggregate_id: string }[]>(
@@ -286,7 +288,7 @@ class MikroOrmOutboxRepository implements OutboxRepository {
           select distinct on (aggregate_id) id
             from outbox_messages
            where published_at is null
-           order by aggregate_id, occurred_at, id)
+           order by aggregate_id, sequence)
           and o.next_attempt_at <= ?
           and (o.locked_until is null or o.locked_until < ?)
         order by o.next_attempt_at
@@ -305,10 +307,10 @@ class MikroOrmOutboxRepository implements OutboxRepository {
        returning *`,
       [new Date(now.getTime() + leaseMs), `{${heads.map((head) => head.aggregate_id).join(',')}}`],
     );
-    // Ordem de publicação: ocorrência e depois id (UUIDv7 desempata eventos do mesmo commit)
+    // Ordem de publicação pela sequência do banco, nunca pelo relógio (occurred_at pode andar para trás)
     return rows
-      .map((row) => toOutboxMessage(fromRawOutbox(row)))
-      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      .sort((a, b) => (BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1))
+      .map((row) => toOutboxMessage(fromRawOutbox(row)));
   }
 
   async markPublished(messages: readonly OutboxMessage[]): Promise<void> {
