@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { LedgerDirection } from '../../src/domain/ledger/ledger-direction';
+import { Money } from '../../src/domain/money/money';
 import { InvalidArgumentError, InvalidTransactionStateError } from '../../src/domain/shared/domain-error';
 import { canonicalJson } from '../../src/domain/shared/payload-hash';
 import { FailureCode } from '../../src/domain/wager-transaction/failure-code';
@@ -143,9 +144,10 @@ describe('WagerTransaction', () => {
       expect(transaction.matchesPayload(computeWagerPayloadHash({ ...original, kind: WagerTransactionKind.Win }))).toBe(false);
     });
 
-    test('valores equivalentes de amount geram o mesmo hash', () => {
+    test('o mesmo valor gera o mesmo hash, venha da entrada ou do banco', () => {
       const payload = wagerPayload({ externalTransactionId: 'same' });
-      expect(computeWagerPayloadHash({ ...payload, money: brl('25.5') })).toBe(computeWagerPayloadHash({ ...payload, money: brl('25.50') }));
+      const rehydrated = Money.rehydrate({ amount: '25.50', currency: 'BRL' });
+      expect(computeWagerPayloadHash({ ...payload, money: rehydrated })).toBe(computeWagerPayloadHash({ ...payload, money: brl('25.50') }));
     });
   });
 });

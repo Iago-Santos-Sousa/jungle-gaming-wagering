@@ -142,6 +142,8 @@ describe('POST /wagering/transactions', () => {
     ['REFUND sem referência', { kind: 'REFUND' }],
     ['valor em notação científica', { money: { amount: '1e2', currency: 'BRL' } }],
     ['valor com mais de 2 casas', { money: { amount: '1.234', currency: 'BRL' } }],
+    ['valor sem casas decimais', { money: { amount: '25', currency: 'BRL' } }],
+    ['valor com uma casa decimal', { money: { amount: '25.5', currency: 'BRL' } }],
     ['amount numérico', { money: { amount: 10, currency: 'BRL' } }],
     ['BET com valor zero', { money: brl('0.00') }],
   ])('400 VALIDATION_ERROR: %s', async (_, overrides) => {

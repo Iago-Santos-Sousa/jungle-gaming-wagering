@@ -88,7 +88,7 @@ export const WagerExamples = {
       value: { transactionId: null, status: 'REJECTED', balance: null, failureCode: 'WALLET_NOT_FOUND', idempotentReplay: false },
     },
   },
-  validationError: error('VALIDATION_ERROR', 'Request validation failed', ['money.amount: amount must be a non-negative decimal string with up to 2 decimal places']),
+  validationError: error('VALIDATION_ERROR', 'Request validation failed', ['money.amount: amount must be a non-negative decimal string with exactly 2 decimal places']),
   missingIdempotencyKey: error('VALIDATION_ERROR', 'Idempotency-Key header is required', ['Idempotency-Key: required']),
   idempotencyConflict: error('IDEMPOTENCY_KEY_CONFLICT', 'Idempotency-Key already used with a different payload'),
   unavailable: error('SERVICE_UNAVAILABLE', 'Temporary failure, retry with the same Idempotency-Key'),

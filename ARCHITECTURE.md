@@ -32,7 +32,7 @@ interfaces/http        interfaces/workers
 
 Escolha consciente: os repositórios usam `em.insert`, `em.nativeUpdate` e SQL explícito (`em.execute`) em vez de `persist/flush`. Num fluxo financeiro, a ordem dos statements e o `UPDATE ... WHERE version = ?` condicionado precisam ser explícitos e imediatos, e o erro de cada constraint precisa aparecer no ponto em que acontece. O Unit of Work do ORM continua delimitando a transação.
 
-**Money**: `decimal.js` (construtor isolado com `Decimal.clone`, precisão 40) no domínio. A entrada aceita só strings decimais não negativas com até 2 casas: `NaN`, `Infinity`, notação científica, sinal, zeros à esquerda, vírgula e string vazia são rejeitados. Não há arredondamento implícito: mais de 2 casas é erro, não arredondamento. A saída é sempre `toFixed(2)`. No banco, valor e moeda ficam em colunas separadas (`numeric(20,2)` + `char(3)`), e o `DecimalType` do MikroORM devolve string, nunca `number`. `Money.rehydrate` aceita valores assinados vindos de agregações SQL (reconciliação). O modelo é multi-moeda e o desafio roda em BRL.
+**Money**: `decimal.js` (construtor isolado com `Decimal.clone`, precisão 40) no domínio. A entrada aceita só strings decimais não negativas com exatamente 2 casas (`"25"` e `"25.5"` são rejeitados): `NaN`, `Infinity`, notação científica, sinal, zeros à esquerda, vírgula e string vazia são rejeitados. Não há arredondamento implícito: mais de 2 casas é erro, não arredondamento. A saída é sempre `toFixed(2)`. No banco, valor e moeda ficam em colunas separadas (`numeric(20,2)` + `char(3)`), e o `DecimalType` do MikroORM devolve string, nunca `number`. `Money.rehydrate` aceita valores assinados vindos de agregações SQL (reconciliação). O modelo é multi-moeda e o desafio roda em BRL.
 
 **Transação**: READ COMMITTED + lock de linha explícito. A wallet é a unidade de concorrência, então o lock da linha da wallet basta para serializar o que precisa ser serializado. SERIALIZABLE causaria aborts em operações que não conflitam de verdade.
 
@@ -58,7 +58,7 @@ Cenário obrigatório (saldo 100.00, duas apostas de 80.00 simultâneas) e a mes
 ## 4. Idempotência
 
 - `Idempotency-Key` é obrigatório e é a fonte da verdade; o default recomendado é `{providerId}:{externalTransactionId}`.
-- **payloadHash**: SHA-256 (hex) do JSON canônico, com chaves ordenadas recursivamente e campos ausentes omitidos, do subconjunto de negócio: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money` (com `amount` já normalizado para 2 casas, então `"25.5"` e `"25.50"` geram o mesmo hash) e `referenceExternalTransactionId`. Header e metadados de transporte não entram.
+- **payloadHash**: SHA-256 (hex) do JSON canônico, com chaves ordenadas recursivamente e campos ausentes omitidos, do subconjunto de negócio: `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`, `kind`, `money` (com `amount` sempre em escala fixa de 2 casas) e `referenceExternalTransactionId`. Header e metadados de transporte não entram.
 - Mesma key e mesmo hash: replay com o resultado original, incluindo o saldo observado no momento da decisão (guardado em `result_balance_*`). Mesma key com hash diferente: **409** `IDEMPOTENCY_KEY_CONFLICT`. Mesmo `(providerId, externalTransactionId)` com outra key também é conflito.
 - No banco: `UNIQUE (idempotency_key)` e `UNIQUE (provider_id, external_transaction_id)`.
 - Nenhuma idempotência depende de memória. O único cache em memória é o das URLs das filas.
