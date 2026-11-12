@@ -32,6 +32,8 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
   private loop: Promise<void> | undefined;
   // Mensagens em processamento, para devolver a visibilidade se o shutdown estourar o tempo
   private readonly inFlight = new Set<Message>();
+  // Devolvidas à fila no timeout do shutdown: o resultado tardio delas não pode mais virar retry nem DLQ
+  private readonly released = new Set<Message>();
   private readonly retryPolicy: RetryPolicy;
 
   constructor(
@@ -69,6 +71,7 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
 
     // Ainda com o cliente SQS vivo: devolve o que está em andamento. Se o commit acontecer depois, o inbox descarta a reentrega.
     const pending = [...this.inFlight];
+    for (const message of pending) this.released.add(message);
     await Promise.all(pending.map((message) => this.release(message)));
     this.logger.warn({ released: pending.length }, 'shutdown timeout reached; in-flight messages released for redelivery');
   }
@@ -125,6 +128,7 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
             await this.handle(message);
           } finally {
             this.inFlight.delete(message);
+            this.released.delete(message);
           }
         }
       }),
@@ -163,6 +167,11 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
   }
 
   private async handleFailure(message: Message, receiveCount: number, error: unknown, logContext: Record<string, string>): Promise<void> {
+    // Já devolvida à fila pelo timeout do shutdown: a reentrega decide de novo; retry ou DLQ aqui duplicariam o destino
+    if (this.released.has(message)) {
+      this.logger.warn({ ...logContext, err: error }, 'wager message failed after being released on shutdown; left for redelivery');
+      return;
+    }
     // Conflito de idempotência é decisão de negócio terminal: reenviar não muda o resultado
     if (error instanceof IdempotencyConflictError) {
       await this.ack(message);
@@ -213,6 +222,8 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
   }
 
   private async deadLetter(message: Message, reason: DeadLetterReason, error: unknown): Promise<void> {
+    // Mensagem devolvida à fila no shutdown nunca vai para a DLQ: ela seria entregue de novo e também ficaria na DLQ
+    if (this.released.has(message)) return;
     const DlqUrl = await this.queues.getUrl(this.config.sqs.wagerDlqName);
     const detail = error instanceof Error ? error.message : String(error);
     await this.client.send(

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { ReceiveMessageCommand, SendMessageBatchCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventPublisher } from '../../src/application/ports/event-publisher';
+import { ConcurrencyConflictError } from '../../src/application/errors';
 import { UnitOfWork } from '../../src/application/ports/repositories';
 import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
 import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
@@ -558,6 +559,41 @@ describe('shutdown do consumer', () => {
       expect(redelivered[0]?.Attributes?.ApproximateReceiveCount).toBe('2');
       expect(await readWalletState(em, wallet.walletId)).toMatchObject({ balance: '100.00', debits: 0 });
     } finally {
+      await instance.close();
+    }
+  });
+
+  test('mensagem em andamento no timeout do shutdown volta para a fila e não vai para a DLQ quando falha depois', async () => {
+    const shutdownQueues = isolatedQueues('shutdown-timeout');
+    // Uma entrega só (SQS_MAX_RECEIVES = 1): sem a proteção, a falha tardia mandaria a mensagem para a DLQ
+    // mesmo ela já tendo voltado para a fila
+    const instance = await startTestApp({ ...overrides, ...shutdownQueues, WORKERS_ENABLED: 'true', SQS_MAX_RECEIVES: '1', SHUTDOWN_TIMEOUT_MS: '2000' });
+    const [url, dlq] = await Promise.all([queueUrl(sqs, shutdownQueues.SQS_WAGER_QUEUE_NAME!), queueUrl(sqs, shutdownQueues.SQS_WAGER_DLQ_NAME!)]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    // Processamento preso até depois do timeout e então falha de forma transitória
+    const spy = spyOn(instance.app.get(SubmitWagerTransactionUseCase), 'execute').mockImplementation(async () => {
+      await gate;
+      throw new ConcurrencyConflictError('simulated lock conflict');
+    });
+    try {
+      const wallet = await createWallet(api, '100.00');
+      await sendRaw(sqs, url, JSON.stringify(wagerEnvelope(messageData(wallet, { amount: '10.00' }))), wallet.walletId);
+      await eventually(async () => spy.mock.calls.length > 0, 15_000, 50);
+
+      await instance.app.get(SqsWagerConsumer).beforeApplicationShutdown();
+      release();
+      await Bun.sleep(300);
+
+      expect(await drain(sqs, dlq, 1)).toHaveLength(0);
+      const redelivered = await eventually(async () => {
+        const { Messages } = await sqs.send(new ReceiveMessageCommand({ QueueUrl: url, WaitTimeSeconds: 1 }));
+        return Messages?.length ? Messages : undefined;
+      }, 10_000);
+      expect(redelivered).toHaveLength(1);
+    } finally {
+      release();
+      spy.mockRestore();
       await instance.close();
     }
   });
