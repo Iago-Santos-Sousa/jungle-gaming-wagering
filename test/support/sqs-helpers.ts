@@ -39,6 +39,18 @@ export async function drain(client: SQSClient, url: string, waitTimeSeconds = 1)
   }
 }
 
+// Acumula mensagens até a condição valer ou o tempo estourar (aí devolve o que tiver, para a asserção mostrar a diferença).
+// Não confia no primeiro receive vazio: o emulador pode devolver vazio com mensagens ainda na fila, por exemplo quando
+// o relógio da VM do Docker é ressincronizado e a visibilidade calculada pelo broker salta.
+export async function drainUntil(client: SQSClient, url: string, done: (all: Message[]) => boolean, timeoutMs = 20_000): Promise<Message[]> {
+  const all: Message[] = [];
+  const deadline = Date.now() + timeoutMs;
+  while (!done(all) && Date.now() < deadline) {
+    all.push(...(await drain(client, url)));
+  }
+  return all;
+}
+
 // Repete a verificação até passar ou estourar o tempo
 export async function eventually<T>(probe: () => Promise<T | undefined | false>, timeoutMs = 20_000, intervalMs = 200): Promise<T> {
   const deadline = Date.now() + timeoutMs;
