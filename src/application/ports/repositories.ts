@@ -63,15 +63,25 @@ export interface InboxRepository {
   register(message: InboxMessage): Promise<InboxMessage | null>;
 }
 
+// Lote reservado por um publisher. leaseUntil é o token do lease: só quem reservou libera ou reagenda essas linhas.
+export interface OutboxClaim {
+  leaseUntil: Date;
+  // Em ordem de publicação (sequence), com um prefixo de cada agregado
+  messages: OutboxMessage[];
+}
+
 export interface OutboxRepository {
   add(messages: readonly OutboxMessage[]): Promise<void>;
-  // Reserva com lease todas as mensagens pendentes de agregados cuja mensagem mais antiga está vencida e livre.
-  // Um agregado fica com um único publisher por vez, o que preserva a ordem por agregado. Exige transação (FOR UPDATE).
-  // Devolve em ordem de publicação. now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
-  claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]>;
-  // Marca o lote publicado com um único UPDATE
-  markPublished(messages: readonly OutboxMessage[]): Promise<void>;
-  scheduleRetry(message: OutboxMessage, error: string): Promise<void>;
+  // Reserva com lease até `limit` mensagens de agregados cuja mensagem mais antiga está vencida e livre, sempre um
+  // prefixo de cada agregado. Um agregado fica com um único publisher por vez, o que preserva a ordem por agregado.
+  // Exige transação (FOR UPDATE). now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
+  claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxClaim>;
+  // Marca o lote publicado com um único UPDATE. O lease só é liberado se ainda for deste publisher.
+  markPublished(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void>;
+  // Falha real: grava tentativas e backoff, só se o lease ainda for deste publisher
+  scheduleRetry(message: OutboxMessage, error: string, leaseUntil: Date): Promise<void>;
+  // Mensagens não enviadas por bloqueio do agregado: devolve sem mexer em tentativas, backoff nem last_error
+  releaseLease(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void>;
   // Idade em segundos da mensagem pendente mais antiga (outbox lag)
   pendingLagSeconds(now: Date): Promise<number>;
 }

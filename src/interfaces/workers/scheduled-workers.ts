@@ -33,11 +33,11 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeAppl
     return this.loop.stop();
   }
 
-  // Retorna true se o lote veio cheio (provavelmente há mais trabalho)
+  // Retorna true se o claim veio cheio (provavelmente há mais trabalho). O claim conta mensagens, com teto batchSize.
   async runOnce(): Promise<boolean> {
     const { batchSize, leaseMs } = this.config.outbox;
-    const published = await this.publishOutbox.publishBatch({ batchSize, leaseMs });
-    return published === batchSize;
+    const { claimed } = await this.publishOutbox.publishBatch({ batchSize, leaseMs });
+    return claimed === batchSize;
   }
 }
 

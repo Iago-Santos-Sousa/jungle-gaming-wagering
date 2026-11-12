@@ -6,6 +6,7 @@ import { UnitOfWork } from '../../src/application/ports/repositories';
 import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
 import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
+import { RetryPolicy } from '../../src/domain/shared/retry-policy';
 import { computeInboxPayloadHash, computeWagerPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
@@ -366,7 +367,7 @@ describe('transactional outbox', () => {
       }
 
       // Claims concorrentes: nenhum agregado fica dividido entre dois publishers
-      const claimWith = (uow: UnitOfWork) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), 2, 500));
+      const claimWith = async (uow: UnitOfWork) => (await uow.transactional((scope) => scope.outbox.claimDue(new Date(), 2, 500))).messages;
       const [a, b] = await Promise.all([claimWith(ctx.app.get(UnitOfWork)), claimWith(other.app.get(UnitOfWork))]);
       const aggregatesOf = (claimed: OutboxMessage[]) => new Set(claimed.map((message) => message.aggregateId));
       expect([...aggregatesOf(a)].filter((id) => aggregatesOf(b).has(id))).toEqual([]);
@@ -388,10 +389,87 @@ describe('transactional outbox', () => {
     }
   });
 
+  // Deixa pendentes só os eventos de saldo da wallet (os demais agregados do cenário são marcados como publicados)
+  async function walletWithOnlyBalanceEventsPending(bets: number): Promise<{ walletId: string; pendingIds: string[] }> {
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
+    const wallet = await createWallet(api, '100.00');
+    for (let i = 0; i < bets; i++) await submitWager(api, wagerBody({ ...wallet, amount: '1.00' }));
+    await em.fork().execute(`update outbox_messages set published_at = ? where published_at is null and aggregate_id <> ?`, [new Date(), wallet.walletId]);
+    const rows = await em.fork().execute<{ id: string }[]>(
+      `select id from outbox_messages where published_at is null and aggregate_id = ? order by sequence`,
+      [wallet.walletId],
+    );
+    return { walletId: wallet.walletId, pendingIds: rows.map((row) => row.id) };
+  }
+
+  const claimOutbox = (uow: UnitOfWork, limit: number, leaseMs: number) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), limit, leaseMs));
+
+  test('claim reserva só um prefixo de cada agregado, com teto de mensagens, e o agregado fica exclusivo', async () => {
+    const { pendingIds } = await walletWithOnlyBalanceEventsPending(7);
+    expect(pendingIds).toHaveLength(8);
+    const uow = ctx.app.get(UnitOfWork);
+
+    const first = await claimOutbox(uow, 3, 30_000);
+    expect(first.messages.map((message) => message.id)).toEqual(pendingIds.slice(0, 3));
+    // A cabeça reservada barra o agregado: as 5 restantes não são entregues a outro publisher
+    expect((await claimOutbox(uow, 50, 30_000)).messages).toEqual([]);
+
+    // Liberado o lease, o próximo claim continua do mesmo ponto, em ordem
+    await uow.read((scope) => scope.outbox.releaseLease(first.messages, first.leaseUntil));
+    const all = await claimOutbox(uow, 50, 30_000);
+    expect(all.messages.map((message) => message.id)).toEqual(pendingIds);
+    await uow.read((scope) => scope.outbox.releaseLease(all.messages, all.leaseUntil));
+  });
+
+  test('publisher atrasado não libera nem reagenda linhas cujo lease outro publisher assumiu', async () => {
+    const { pendingIds } = await walletWithOnlyBalanceEventsPending(1);
+    const uow = ctx.app.get(UnitOfWork);
+    const stale = await claimOutbox(uow, 50, 200);
+    await Bun.sleep(300);
+    const current = await claimOutbox(uow, 50, 30_000);
+    expect(current.messages.map((message) => message.id)).toEqual(pendingIds);
+
+    // O publisher antigo termina depois: falha na cabeça e publica a seguinte com o token vencido
+    const [head, next] = stale.messages;
+    head!.scheduleRetry(new Date(), new RetryPolicy(1_000, 60_000));
+    next!.markPublished(new Date());
+    await uow.read(async (scope) => {
+      await scope.outbox.scheduleRetry(head!, 'late failure', stale.leaseUntil);
+      await scope.outbox.markPublished([next!], stale.leaseUntil);
+    });
+
+    const rows = await em.fork().execute<{ id: string; attempts: number; last_error: string | null; locked_until: Date | null; published_at: Date | null }[]>(
+      `select id, attempts, last_error, locked_until, published_at from outbox_messages where id = any(?::uuid[]) order by sequence`,
+      [`{${pendingIds.join(',')}}`],
+    );
+    // Reagendamento ignorado e lease do publisher atual preservado; publicado continua sendo gravado
+    expect(rows[0]).toMatchObject({ attempts: 0, last_error: null, published_at: null });
+    expect(new Date(rows[0]!.locked_until!).getTime()).toBe(current.leaseUntil.getTime());
+    expect(rows[1]?.published_at).not.toBeNull();
+    expect(new Date(rows[1]!.locked_until!).getTime()).toBe(current.leaseUntil.getTime());
+    expect((await claimOutbox(uow, 50, 30_000)).messages).toEqual([]);
+    await uow.read((scope) => scope.outbox.releaseLease(current.messages, current.leaseUntil));
+  });
+
+  test('runOnce sinaliza mais trabalho só quando o claim vem cheio', async () => {
+    await walletWithOnlyBalanceEventsPending(4);
+    const small = await startTestApp({ ...overrides, OUTBOX_BATCH_SIZE: '2' });
+    try {
+      const worker = small.app.get(OutboxPublisherWorker);
+      expect(await worker.runOnce()).toBe(true);
+      expect(await worker.runOnce()).toBe(true);
+      // Restou 1 de 5
+      expect(await worker.runOnce()).toBe(false);
+      expect(await worker.runOnce()).toBe(false);
+    } finally {
+      await small.close();
+    }
+  });
+
   test('commit confirmado e processo morto antes de publicar: outra instância publica após o lease', async () => {
     const wallet = await createWallet(api, '100.00');
     // Instância A reserva o lote (lease) e morre antes de publicar
-    const claimed = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
+    const { messages: claimed } = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
     expect(claimed.some((message) => message.aggregateId === wallet.walletId)).toBe(true);
 
     const other = await startTestApp(overrides);
@@ -411,7 +489,7 @@ describe('transactional outbox', () => {
 
   test('publicação duplicada carrega o mesmo eventId e é deduplicável pelo consumidor', async () => {
     const wallet = await createWallet(api, '100.00');
-    const [message] = (await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, 1))).filter((m) => m.aggregateId === wallet.walletId);
+    const [message] = (await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, 1))).messages.filter((m) => m.aggregateId === wallet.walletId);
     expect(message).toBeDefined();
     // Publica, "perde" a confirmação e publica de novo após o lease vencer
     await ctx.app.get(EventPublisher).publish([message!]);
