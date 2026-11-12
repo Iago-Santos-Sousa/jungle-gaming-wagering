@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { GetQueueAttributesCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { SQS_CLIENT } from '../../src/infrastructure/messaging/sqs.module';
 import { ReprocessPendingReferenceUseCase } from '../../src/application/use-cases/wager-use-cases';
 import { WagerTransactionStatus } from '../../src/domain/wager-transaction/wager-transaction';
 import {
@@ -307,5 +309,26 @@ describe('health e métricas', () => {
     for (const name of ['wager_transactions_total', 'duplicates_detected_total', 'processing_duration_seconds', 'outbox_lag_seconds', 'dlq_depth']) {
       expect(metrics).toContain(name);
     }
+  });
+
+  test('readiness consulta o SQS a cada chamada, mesmo com a URL da fila em cache', async () => {
+    // Primeira chamada aquece o cache de URL
+    expect((await api.get('/health/ready')).status).toBe(200);
+
+    const client = ctx.app.get<SQSClient>(SQS_CLIENT);
+    const original = client.send.bind(client);
+    // Simula o SQS fora do ar só para a verificação de alcance
+    const spy = spyOn(client, 'send').mockImplementation(((command: unknown, ...rest: unknown[]) => {
+      if (command instanceof GetQueueAttributesCommand) return Promise.reject(new Error('connect ECONNREFUSED'));
+      return (original as (...args: unknown[]) => Promise<unknown>)(command, ...rest);
+    }) as typeof client.send);
+    try {
+      const response = await api.get('/health/ready');
+      expect(response.status).toBe(503);
+      expect(response.body).toEqual({ status: 'unavailable', checks: { database: 'up', sqs: 'down' } });
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await api.get('/health/ready')).status).toBe(200);
   });
 });

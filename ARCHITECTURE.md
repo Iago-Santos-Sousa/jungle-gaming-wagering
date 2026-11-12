@@ -195,7 +195,7 @@ Eventos (classe abstrata `IntegrationEvent<T>` com `eventType` e `version` no ti
 
 - **Logs** JSON (`nestjs-pino`) com `correlationId` (header `X-Correlation-Id` ou gerado, devolvido na resposta), `messageId`, `transactionId`, `walletId` e `providerId` nas decisões, no consumer e nos workers. Corpo de requisição, payload financeiro completo e headers sensíveis não são logados.
 - **Métricas** em `/metrics`: `wager_transactions_total{kind,status}`, `duplicates_detected_total{source}`, `retries_total{component}`, `dlq_messages_total{reason}`, `dlq_depth`, `lock_conflicts_total`, `outbox_lag_seconds`, `processing_duration_seconds{source}`, `reconciliation_divergences_total` e as métricas padrão do processo.
-- **Health**: `/health/live` sem dependências e `/health/ready` com `select 1` e `GetQueueUrl`, ambos com timeout de 2s e sem autenticação.
+- **Health**: `/health/live` sem dependências e `/health/ready` com `select 1` e `GetQueueAttributes` (chamada real ao SQS a cada verificação, mesmo com a URL da fila em cache), ambos com timeout de 2s e sem autenticação.
 
 ## 12. Autenticação (não implementada)
 

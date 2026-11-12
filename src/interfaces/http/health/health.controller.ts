@@ -50,7 +50,7 @@ export class HealthController {
   async ready(@Res({ passthrough: true }) res: Response) {
     const [database, sqs] = await Promise.all([
       check(() => this.orm.em.getConnection().execute('select 1')),
-      check(() => this.queues.getUrl(this.config.sqs.wagerQueueName)),
+      check(() => this.queues.ping(this.config.sqs.wagerQueueName)),
     ]);
     const ready = database === 'up' && sqs === 'up';
     res.status(ready ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
