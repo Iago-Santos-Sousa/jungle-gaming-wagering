@@ -7,6 +7,7 @@ import type {
   LedgerRepository,
   LedgerSummary,
   OutboxClaim,
+  OutboxFailure,
   OutboxRepository,
   PendingReferenceClaim,
   RepositoryScope,
@@ -108,13 +109,22 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
 
   async insert(transaction: WagerTransaction): Promise<void> {
     try {
-      await this.em.insert(WagerTransactionRecord, fromWagerTransaction(transaction));
+      // Savepoint (em.transactional aninhado): se a unique falhar, a transação externa continua utilizável
+      // para conferir a causa antes de classificar o erro
+      await this.em.transactional((em) => em.insert(WagerTransactionRecord, fromWagerTransaction(transaction)));
     } catch (error) {
       const constraint = uniqueViolationConstraint(error);
-      // 'unknown': o driver não informou o nome. As outras unique da tabela só colidiriam com UUIDv7 repetido,
-      // então tratar como corrida de idempotência (o use case relê e responde replay ou conflito) é o caminho seguro.
-      if (constraint && (IDEMPOTENCY_CONSTRAINTS.has(constraint) || constraint === 'unknown')) {
+      if (constraint && IDEMPOTENCY_CONSTRAINTS.has(constraint)) {
         throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+      }
+      // 'unknown': o driver não informou o nome. Só é corrida de idempotência se já existir outra transação com a
+      // mesma key ou o mesmo id externo; qualquer outra unique (PK repetida, constraint futura) mantém o erro original.
+      // A linha concorrente já está confirmada: uma violação de unique só acontece depois do commit da outra.
+      if (constraint === 'unknown') {
+        const matches = await this.findIdempotencyMatches(transaction.idempotencyKey, transaction.providerId, transaction.externalTransactionId);
+        if (matches.some((match) => match.id !== transaction.id)) {
+          throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+        }
       }
       throw error;
     }
@@ -255,6 +265,7 @@ interface RawOutboxRow {
   last_error: string | null;
   // bigint chega como string pelo driver pg
   sequence: string;
+  is_head: boolean;
 }
 
 function fromRawOutbox(row: RawOutboxRow): OutboxMessageRow {
@@ -269,34 +280,59 @@ function fromRawOutbox(row: RawOutboxRow): OutboxMessageRow {
     lockedUntil: row.locked_until ? new Date(row.locked_until) : null,
     publishedAt: row.published_at ? new Date(row.published_at) : null,
     lastError: row.last_error,
+    isHead: row.is_head,
   };
 }
+
+// Namespace dos advisory locks de agregado da outbox (forma de duas chaves int4, separada da chave bigint do boot)
+const OUTBOX_AGGREGATE_LOCK_NAMESPACE = 7001;
 
 class MikroOrmOutboxRepository implements OutboxRepository {
   constructor(private readonly em: EntityManager) {}
 
+  // Serializa insert e promoção de cabeça do mesmo agregado. Sempre em ordem crescente, para não haver deadlock
+  // entre transações que travam mais de um agregado; exige transação aberta (lock liberado no commit).
+  private async lockAggregates(aggregateIds: readonly string[]): Promise<void> {
+    const sorted = [...new Set(aggregateIds)].sort();
+    if (sorted.length === 0) return;
+    await this.em.execute(
+      `select pg_advisory_xact_lock(?::int, hashtext(s.aggregate_id))
+         from (select unnest(?::text[]) as aggregate_id order by 1) s`,
+      [OUTBOX_AGGREGATE_LOCK_NAMESPACE, `{${sorted.join(',')}}`],
+    );
+  }
+
   async add(messages: readonly OutboxMessage[]): Promise<void> {
     if (messages.length === 0) return;
-    await this.em.insertMany(OutboxMessageRecord, messages.map(fromOutboxMessage));
+    const aggregateIds = [...new Set(messages.map((message) => message.aggregateId))];
+    await this.lockAggregates(aggregateIds);
+    // Agregado que já tem pendente mantém a cabeça atual; senão a primeira mensagem nova vira a cabeça
+    const pending = await this.em.execute<{ aggregate_id: string }[]>(
+      `select distinct aggregate_id from outbox_messages where published_at is null and aggregate_id = any(?::uuid[])`,
+      [`{${aggregateIds.join(',')}}`],
+    );
+    const withHead = new Set(pending.map((row) => row.aggregate_id));
+    const rows = messages.map((message) => {
+      const isHead = !withHead.has(message.aggregateId);
+      withHead.add(message.aggregateId);
+      return fromOutboxMessage(message, isHead);
+    });
+    await this.em.insertMany(OutboxMessageRecord, rows);
   }
 
   async claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxClaim> {
     const leaseUntil = new Date(now.getTime() + leaseMs);
-    // 1) Trava a cabeça (menor sequence pendente) de até `limit` agregados vencidos e livres.
-    //    Parte do índice de vencidas (outbox_messages_due_idx) em ordem e para no limit; o NOT EXISTS, coberto pelo
-    //    índice (aggregate_id, sequence), descarta quem não é cabeça. SKIP LOCKED faz publishers concorrentes pegarem
-    //    agregados diferentes, e o FOR UPDATE reavalia o WHERE (inclusive published_at e lease) na versão mais nova da linha.
+    // 1) Trava a cabeça de até `limit` agregados vencidos e livres. Só as cabeças estão no índice parcial
+    //    outbox_messages_due_head_idx, então a varredura para no limit e nunca passa pelos eventos seguintes de um
+    //    agregado com acúmulo. SKIP LOCKED faz publishers concorrentes pegarem agregados diferentes, e o FOR UPDATE
+    //    reavalia o WHERE (published_at, is_head e lease) na versão mais nova da linha.
     const heads = await this.em.execute<{ aggregate_id: string }[]>(
       `select o.aggregate_id
          from outbox_messages o
         where o.published_at is null
+          and o.is_head
           and o.next_attempt_at <= ?
           and (o.locked_until is null or o.locked_until < ?)
-          and not exists (
-            select 1 from outbox_messages p
-             where p.aggregate_id = o.aggregate_id
-               and p.published_at is null
-               and p.sequence < o.sequence)
         order by o.next_attempt_at
         limit ?
         for update skip locked`,
@@ -304,24 +340,29 @@ class MikroOrmOutboxRepository implements OutboxRepository {
     );
     if (heads.length === 0) return { leaseUntil, messages: [] };
 
-    // 2) Reserva um prefixo de cada agregado, com teto total de `limit` mensagens. Ordenar por posição no agregado (rn)
-    //    garante que toda cabeça entra e que cada agregado leva só as primeiras mensagens dele; o resto fica para depois,
-    //    e a cabeça com lease impede outro publisher de pegar o agregado enquanto isso.
+    // 2) Reserva um prefixo de cada agregado, com teto total de `limit` mensagens. O LATERAL lê no máximo `limit`
+    //    linhas de cada agregado pelo índice (aggregate_id, sequence), sem tocar no resto do acúmulo. Ordenar pela
+    //    posição no agregado garante que toda cabeça entra; a cabeça com lease impede outro publisher de pegar o agregado.
     const rows = await this.em.execute<RawOutboxRow[]>(
-      `with ranked as (
-         select id, row_number() over (partition by aggregate_id order by sequence) as rn
-           from outbox_messages
-          where published_at is null
-            and aggregate_id = any(?::uuid[])
-       ), picked as (
-         select id from ranked order by rn, id limit ?
+      `with picked as (
+         select x.id
+           from unnest(?::uuid[]) as h(aggregate_id)
+          cross join lateral (
+            select id, sequence
+              from outbox_messages
+             where aggregate_id = h.aggregate_id
+               and published_at is null
+             order by sequence
+             limit ?) x
+          order by row_number() over (partition by h.aggregate_id order by x.sequence), x.id
+          limit ?
        )
        update outbox_messages o
           set locked_until = ?
          from picked
         where o.id = picked.id
        returning o.*`,
-      [`{${heads.map((head) => head.aggregate_id).join(',')}}`, limit, leaseUntil],
+      [`{${heads.map((head) => head.aggregate_id).join(',')}}`, limit, limit, leaseUntil],
     );
     // Ordem de publicação pela sequência do banco, nunca pelo relógio (occurred_at pode andar para trás)
     const messages = rows
@@ -332,24 +373,50 @@ class MikroOrmOutboxRepository implements OutboxRepository {
 
   async markPublished(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void> {
     if (messages.length === 0) return;
+    const aggregateIds = [...new Set(messages.map((message) => message.aggregateId))];
+    await this.lockAggregates(aggregateIds);
     // Publicado é fato e sempre é gravado; o lease só é zerado se ainda for deste publisher
     await this.em.execute(
       `update outbox_messages
           set published_at = ?,
+              is_head = false,
               last_error = null,
               locked_until = case when locked_until = ? then null else locked_until end
         where id = any(?::uuid[])
           and published_at is null`,
       [messages[0]?.publishedAt ?? new Date(), leaseUntil, `{${messages.map((message) => message.id).join(',')}}`],
     );
+    // Promove a nova cabeça de cada agregado (a pendente de menor sequence), sob o mesmo advisory lock do insert
+    await this.em.execute(
+      `update outbox_messages
+          set is_head = true
+        where id in (
+          select distinct on (aggregate_id) id
+            from outbox_messages
+           where published_at is null
+             and aggregate_id = any(?::uuid[])
+           order by aggregate_id, sequence)
+          and not is_head`,
+      [`{${aggregateIds.join(',')}}`],
+    );
   }
 
-  async scheduleRetry(message: OutboxMessage, error: string, leaseUntil: Date): Promise<void> {
-    // Sem efeito se o lease venceu e outro publisher assumiu o agregado
-    await this.em.nativeUpdate(
-      OutboxMessageRecord,
-      { id: message.id, publishedAt: null, lockedUntil: leaseUntil },
-      { attempts: message.attempts, nextAttemptAt: message.nextAttemptAt ?? new Date(), lockedUntil: null, lastError: error.slice(0, 512) },
+  async scheduleRetries(failures: readonly OutboxFailure[], leaseUntil: Date): Promise<void> {
+    if (failures.length === 0) return;
+    // Um único UPDATE para o lote inteiro; sem efeito nas linhas cujo lease outro publisher assumiu
+    const values = failures.map(() => '(?::uuid, ?::int, ?::timestamptz, ?::varchar)').join(', ');
+    const params = failures.flatMap(({ message, error }) => [message.id, message.attempts, message.nextAttemptAt ?? new Date(), error.slice(0, 512)]);
+    await this.em.execute(
+      `update outbox_messages o
+          set attempts = v.attempts,
+              next_attempt_at = v.next_attempt_at,
+              locked_until = null,
+              last_error = v.last_error
+         from (values ${values}) as v(id, attempts, next_attempt_at, last_error)
+        where o.id = v.id
+          and o.published_at is null
+          and o.locked_until = ?`,
+      [...params, leaseUntil],
     );
   }
 

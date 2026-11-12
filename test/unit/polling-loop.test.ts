@@ -26,6 +26,26 @@ describe('PollingLoop', () => {
     release();
   });
 
+  test('start depois de stop volta a rodar ciclos completos', async () => {
+    const seen: boolean[] = [];
+    let loop!: PollingLoop;
+    loop = new PollingLoop('restart', 10, async () => {
+      seen.push(loop.stopping);
+      return false;
+    }, logger);
+    loop.start();
+    await Bun.sleep(30);
+    await loop.stop(100);
+    seen.length = 0;
+
+    loop.start();
+    expect(loop.stopping).toBe(false);
+    await Bun.sleep(30);
+    await loop.stop(100);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((stopping) => stopping === false)).toBe(true);
+  });
+
   test('stopping só fica verdadeiro depois do stop, mesmo antes do start', async () => {
     const loop = new PollingLoop('idle', 10, async () => false, logger);
     expect(loop.stopping).toBe(false);

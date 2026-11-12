@@ -146,6 +146,14 @@ describe('consumer SQS', () => {
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
     expect(await inboxConflicts()).toBe(conflictsBefore);
     expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+
+    // Mesmo messageId e mesma operação, mas com outra Idempotency-Key: o hash legado bate, a key não. É conflito.
+    await send({ ...data, idempotencyKey: `other-${newId()}` }, messageId);
+    await consumeUntilEmpty();
+    expect(await inboxConflicts()).toBe(conflictsBefore + 1);
+    expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+    expect(await drain(sqs, dlqUrl, 0)).toHaveLength(0);
   });
 
   test('worker morto depois do commit e antes do ack: a reentrega é deduplicada', async () => {
@@ -175,7 +183,8 @@ describe('consumer SQS', () => {
     await send({ ...messageData(wallet), kind: 'OPENING' });
     await send({ ...messageData(wallet), money: { amount: '1e3', currency: 'BRL' } });
     await consumeUntilEmpty();
-    const dead = await drain(sqs, dlqUrl);
+    // Espera as 3 chegarem: o emulador pode devolver receive vazio com mensagens ainda na fila
+    const dead = await drainUntil(sqs, dlqUrl, (all) => all.length >= 3, 10_000);
     expect(dead).toHaveLength(3);
     expect(dead.every((m) => m.MessageAttributes?.reason?.StringValue === 'invalid_message')).toBe(true);
     expect(await readWalletState(em, wallet.walletId)).toMatchObject({ balance: '100.00', entries: 1 });
@@ -272,7 +281,7 @@ describe('referências fora de ordem via SQS', () => {
       return found[0]?.status === 'REJECTED' ? found : undefined;
     }, 15_000);
     expect(rows[0]).toMatchObject({ failure_code: 'REFERENCE_NOT_FOUND', reference_attempts: ctx.config.pendingReference.maxAttempts - 1 });
-    const events = await em.fork().execute<{ event_type: string }[]>(`select event_type from outbox_messages where aggregate_id = ? order by occurred_at`, [rows[0]!.id]);
+    const events = await em.fork().execute<{ event_type: string }[]>(`select event_type from outbox_messages where aggregate_id = ? order by sequence`, [rows[0]!.id]);
     expect(events.map((e) => e.event_type)).toEqual(['WagerTransactionPendingReference', 'WagerTransactionRejected']);
   });
 
@@ -419,6 +428,39 @@ describe('transactional outbox', () => {
 
   const claimOutbox = (uow: UnitOfWork, limit: number, leaseMs: number) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), limit, leaseMs));
 
+  test('is_head: com inserts e publicações concorrentes, cada agregado pendente tem uma única cabeça, a de menor sequence', async () => {
+    const other = await startTestApp(overrides);
+    try {
+      const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(api, '100.00')));
+      let betting = true;
+      // Publishers rodando enquanto as apostas inserem eventos nas mesmas wallets
+      const publishing = (async () => {
+        while (betting) await Promise.all([ctx.app.get(OutboxPublisherWorker).runOnce(), other.app.get(OutboxPublisherWorker).runOnce()]);
+      })();
+      for (let round = 0; round < 6; round++) {
+        await Promise.all(wallets.map((wallet) => submitWager(api, wagerBody({ ...wallet, amount: '1.00' }))));
+      }
+      betting = false;
+      await publishing;
+
+      const violations = await em.fork().execute<{ aggregate_id: string }[]>(
+        `with pending as (
+           select aggregate_id, id, is_head, row_number() over (partition by aggregate_id order by sequence) as rn
+             from outbox_messages where published_at is null)
+         select aggregate_id from pending
+          group by aggregate_id
+         having count(*) filter (where is_head) <> 1
+             or bool_or(is_head and rn <> 1)`,
+      );
+      expect(violations).toEqual([]);
+
+      // E tudo acaba publicado em ordem por wallet
+      await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
+    } finally {
+      await other.close();
+    }
+  });
+
   test('claim reserva só um prefixo de cada agregado, com teto de mensagens, e o agregado fica exclusivo', async () => {
     const { pendingIds } = await walletWithOnlyBalanceEventsPending(7);
     expect(pendingIds).toHaveLength(8);
@@ -449,8 +491,8 @@ describe('transactional outbox', () => {
     const [head, next] = stale.messages;
     head!.scheduleRetry(new Date(), new RetryPolicy(1_000, 60_000));
     next!.markPublished(new Date());
-    await uow.read(async (scope) => {
-      await scope.outbox.scheduleRetry(head!, 'late failure', stale.leaseUntil);
+    await uow.transactional(async (scope) => {
+      await scope.outbox.scheduleRetries([{ message: head!, error: 'late failure' }], stale.leaseUntil);
       await scope.outbox.markPublished([next!], stale.leaseUntil);
     });
 
@@ -498,6 +540,40 @@ describe('transactional outbox', () => {
     const idsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => pendingIds.includes(id));
     const published = await drainUntil(sqs, eventsUrl, (all) => idsIn(all).length >= pendingIds.length);
     expect(idsIn(bySendOrder(published))).toEqual(pendingIds);
+  });
+
+  test('broker fora do ar: runOnce não pede nova rodada e o retry em lote grava todas as falhas', async () => {
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
+    const wallets = await Promise.all(Array.from({ length: 3 }, () => createWallet(api, '100.00')));
+    const walletIds = wallets.map((wallet) => wallet.walletId);
+    // Só os eventos de saldo das 3 wallets ficam pendentes e vencidos: 3 cabeças
+    await em.fork().execute(`update outbox_messages set published_at = ? where published_at is null and aggregate_id <> all(?::uuid[])`, [new Date(), `{${walletIds.join(',')}}`]);
+    const headRows = await em.fork().execute<{ id: string }[]>(`select id from outbox_messages where published_at is null`);
+    await makeDue(headRows.map((row) => row.id));
+
+    const small = await startTestApp({ ...overrides, OUTBOX_BATCH_SIZE: '3' });
+    const client = small.app.get<SQSClient>(SQS_CLIENT);
+    const original = client.send.bind(client);
+    const spy = spyOn(client, 'send').mockImplementation((async (command: unknown, ...rest: unknown[]) => {
+      if (command instanceof SendMessageBatchCommand) throw new Error('simulated outage');
+      return (original as (...args: unknown[]) => Promise<unknown>)(command, ...rest);
+    }) as typeof client.send);
+    try {
+      // Claim cheio (3 de 3), mas nada saiu: sem progresso, o loop deve esperar o intervalo
+      expect(await small.app.get(OutboxPublisherWorker).runOnce()).toBe(false);
+    } finally {
+      spy.mockRestore();
+      await small.close();
+    }
+
+    const rows = await em.fork().execute<{ attempts: number; last_error: string | null; locked_until: Date | null }[]>(
+      `select attempts, last_error, locked_until from outbox_messages where id = any(?::uuid[])`,
+      [`{${headRows.map((row) => row.id).join(',')}}`],
+    );
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(row).toMatchObject({ attempts: 1, last_error: 'simulated outage', locked_until: null });
+    await makeDue(headRows.map((row) => row.id));
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
   });
 
   test('runOnce sinaliza mais trabalho só quando o claim vem cheio', async () => {

@@ -165,17 +165,17 @@ export class SubmitWagerTransactionUseCase {
       inbox.markProcessed(now);
       const registered = await scope.inbox.register(inbox);
       if (registered) {
-        // Compatibilidade: linhas gravadas antes do hash do inbox incluir a Idempotency-Key guardam só o hash de negócio
-        // (payloadHash). Os dois formatos não colidem, então a detecção de conflito continua valendo.
-        // Pode sair depois que a janela de redelivery das mensagens antigas tiver passado.
-        const sameMessage = registered.matchesPayload(ctx.inbox.payloadHash) || registered.matchesPayload(payloadHash);
-        if (!sameMessage) {
-          this.metrics.duplicateDetected('inbox_conflict');
-          throw new IdempotencyConflictError('messageId already used with a different payload');
+        if (registered.matchesPayload(ctx.inbox.payloadHash)) {
+          this.metrics.duplicateDetected('inbox');
+          const previous = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
+          return previous ? outcomeOf(previous, true, true) : this.walletNotFound(true);
         }
-        this.metrics.duplicateDetected('inbox');
-        const previous = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
-        return previous ? outcomeOf(previous, true, true) : this.walletNotFound(true);
+        // Compatibilidade: linhas gravadas antes do hash do inbox incluir a Idempotency-Key guardam só o hash de negócio
+        // (payloadHash), que não diz qual key foi usada. A key é conferida pela transação registrada com a mesma
+        // identidade de negócio. Pode sair depois que a janela de redelivery das mensagens antigas tiver passado.
+        if (registered.matchesPayload(payloadHash)) return this.legacyInboxDuplicate(scope, command);
+        this.metrics.duplicateDetected('inbox_conflict');
+        throw new IdempotencyConflictError('messageId already used with a different payload');
       }
     }
 
@@ -198,6 +198,24 @@ export class SubmitWagerTransactionUseCase {
     const transaction = WagerTransaction.create({ ...command, id: this.ids.next(), payloadHash, createdAt: now });
     await this.writer.settle(scope, transaction, wallet, true, { correlationId: ctx.correlationId, causationId: ctx.causationId });
     return outcomeOf(transaction, false);
+  }
+
+  // Reentrega de uma mensagem cujo inbox guardou só o hash de negócio
+  private async legacyInboxDuplicate(scope: RepositoryScope, command: SubmitWagerCommand): Promise<WagerOutcome> {
+    const matches = await scope.transactions.findIdempotencyMatches(command.idempotencyKey, command.providerId, command.externalTransactionId);
+    const sameKey = matches.find((match) => match.idempotencyKey === command.idempotencyKey);
+    if (sameKey) {
+      this.metrics.duplicateDetected('inbox');
+      return outcomeOf(sameKey, true, true);
+    }
+    // Mesma operação do provedor registrada com outra key: conflito, nunca replay
+    if (matches.length > 0) {
+      this.metrics.duplicateDetected('inbox_conflict');
+      throw new IdempotencyConflictError('messageId already used with a different Idempotency-Key');
+    }
+    // Nada persistido: a entrega original terminou em WALLET_NOT_FOUND
+    this.metrics.duplicateDetected('inbox');
+    return this.walletNotFound(true);
   }
 
   private walletNotFound(duplicateMessage: boolean): WagerOutcome {

@@ -70,16 +70,24 @@ export interface OutboxClaim {
   messages: OutboxMessage[];
 }
 
+export interface OutboxFailure {
+  // Já com attempts e nextAttemptAt recalculados pelo domínio (scheduleRetry)
+  message: OutboxMessage;
+  error: string;
+}
+
 export interface OutboxRepository {
+  // Exige transação: mantém a cabeça de cada agregado sob advisory lock, na mesma transação do efeito financeiro
   add(messages: readonly OutboxMessage[]): Promise<void>;
   // Reserva com lease até `limit` mensagens de agregados cuja mensagem mais antiga está vencida e livre, sempre um
   // prefixo de cada agregado. Um agregado fica com um único publisher por vez, o que preserva a ordem por agregado.
   // Exige transação (FOR UPDATE). now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
   claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxClaim>;
-  // Marca o lote publicado com um único UPDATE. O lease só é liberado se ainda for deste publisher.
+  // Marca o lote publicado com um único UPDATE e promove a próxima cabeça de cada agregado. Exige transação.
+  // O lease só é liberado se ainda for deste publisher.
   markPublished(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void>;
-  // Falha real: grava tentativas e backoff, só se o lease ainda for deste publisher
-  scheduleRetry(message: OutboxMessage, error: string, leaseUntil: Date): Promise<void>;
+  // Falhas reais do lote num único UPDATE: grava tentativas e backoff, só onde o lease ainda é deste publisher
+  scheduleRetries(failures: readonly OutboxFailure[], leaseUntil: Date): Promise<void>;
   // Mensagens não enviadas por bloqueio do agregado: devolve sem mexer em tentativas, backoff nem last_error
   releaseLease(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void>;
   // Idade em segundos da mensagem pendente mais antiga (outbox lag)

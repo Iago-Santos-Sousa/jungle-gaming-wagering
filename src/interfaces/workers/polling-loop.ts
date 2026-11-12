@@ -19,6 +19,8 @@ export class PollingLoop {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
+    // Um novo start desfaz um stop anterior: os ciclos voltam a rodar por inteiro
+    this.stopRequested = false;
     this.schedule(0);
   }
 

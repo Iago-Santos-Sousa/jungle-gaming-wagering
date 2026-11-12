@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { SendMessageBatchCommand, type SQSClient } from '@aws-sdk/client-sqs';
-import { EventPublisher, type PublishResult } from '../../application/ports/event-publisher';
+import { EventPublisher, type PublishOptions, type PublishResult } from '../../application/ports/event-publisher';
 import type { OutboxMessage } from '../../domain/messaging/outbox-message';
 import { APP_CONFIG, type AppConfig } from '../config/app-config';
 import { SQS_CLIENT, SqsQueueResolver } from './sqs.module';
@@ -24,7 +24,9 @@ export class SqsEventPublisher extends EventPublisher {
   // Nenhum lote tem dois eventos do mesmo agregado, então uma falha parcial por entrada do SendMessageBatch
   // nunca deixa um evento posterior passar na frente de um anterior. Uma wallet com muitos eventos publica um por
   // chamada; o claim limita o lote, então o pior caso cabe no lease.
-  async publish(messages: readonly OutboxMessage[]): Promise<PublishResult> {
+  // Os lotes de uma mesma rodada vão em paralelo: não há dois eventos do mesmo agregado na rodada, e agregados
+  // diferentes não têm ordem entre si. As rodadas seguem em sequência.
+  async publish(messages: readonly OutboxMessage[], options: PublishOptions = {}): Promise<PublishResult> {
     const result: PublishResult = { published: [], failed: [], skipped: [] };
     // Fila de cada agregado, na ordem recebida (sequence)
     const queues = new Map<string, OutboxMessage[]>();
@@ -35,11 +37,16 @@ export class SqsEventPublisher extends EventPublisher {
     }
 
     while (queues.size > 0) {
+      // Shutdown pedido: não inicia nova rodada; o resto volta para a fila e o ciclo confirma o que já saiu
+      if (options.shouldStop?.()) {
+        for (const queue of queues.values()) result.skipped.push(...queue);
+        break;
+      }
       const round = [...queues.values()].map((queue) => queue[0]!);
       const failedBefore = result.failed.length;
-      for (let start = 0; start < round.length; start += SQS_BATCH_LIMIT) {
-        await this.publishChunk(round.slice(start, start + SQS_BATCH_LIMIT), result);
-      }
+      const chunks: OutboxMessage[][] = [];
+      for (let start = 0; start < round.length; start += SQS_BATCH_LIMIT) chunks.push(round.slice(start, start + SQS_BATCH_LIMIT));
+      await Promise.all(chunks.map((chunk) => this.publishChunk(chunk, result)));
       // Agregado com falha nesta rodada: os seguintes dele não são enviados neste ciclo
       const blocked = new Set(result.failed.slice(failedBefore).map(({ message }) => message.aggregateId));
       for (const [aggregateId, queue] of queues) {

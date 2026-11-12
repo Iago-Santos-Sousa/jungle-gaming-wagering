@@ -56,6 +56,43 @@ describe('SqsEventPublisher', () => {
     expect(result.published.map((published) => published.id)).toEqual(['b-1', 'b-2']);
   });
 
+  test('lotes da mesma rodada saem em paralelo e a rodada seguinte só começa depois', async () => {
+    // 12 agregados com 2 eventos cada: 2 rodadas de 2 lotes (10 + 2)
+    const messages = Array.from({ length: 12 }, (_, i) => [message(`g${i}-1`, `g${i}`), message(`g${i}-2`, `g${i}`)]).flat();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const roundsSeen: string[][] = [];
+    const client = {
+      send: async (command: SendMessageBatchCommand) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Bun.sleep(20);
+        roundsSeen.push((command.input.Entries ?? []).map((entry) => String(entry.MessageDeduplicationId)));
+        inFlight -= 1;
+        return { Failed: [], Successful: [] };
+      },
+    } as unknown as SQSClient;
+    await new SqsEventPublisher(client, queues, loadConfig({})).publish(messages);
+
+    expect(maxInFlight).toBe(2);
+    // Todos os primeiros eventos (rodada 1) foram enviados antes de qualquer segundo evento (rodada 2)
+    const order = roundsSeen.flat();
+    const lastFirst = Math.max(...order.map((id, index) => (id.endsWith('-1') ? index : -1)));
+    const firstSecond = order.findIndex((id) => id.endsWith('-2'));
+    expect(lastFirst).toBeLessThan(firstSecond);
+  });
+
+  test('shouldStop entre rodadas: o que não saiu volta como skipped', async () => {
+    const messages = [message('a-1', 'a'), message('a-2', 'a'), message('a-3', 'a'), message('b-1', 'b')];
+    const { client, sent } = fakeClient(new Set());
+    let rounds = 0;
+    const result = await new SqsEventPublisher(client, queues, loadConfig({})).publish(messages, { shouldStop: () => rounds++ >= 1 });
+
+    expect(sent.flat()).toEqual(['a-1', 'b-1']);
+    expect(result.published.map((published) => published.id)).toEqual(['a-1', 'b-1']);
+    expect(result.skipped.map((skipped) => skipped.id)).toEqual(['a-2', 'a-3']);
+  });
+
   test('mais de 10 agregados numa rodada são divididos em lotes de até 10', async () => {
     const messages = Array.from({ length: 12 }, (_, i) => message(`g${i}-1`, `g${i}`));
     const { client, sent } = fakeClient(new Set());
