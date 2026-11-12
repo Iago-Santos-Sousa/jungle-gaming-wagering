@@ -108,13 +108,22 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
 
   async insert(transaction: WagerTransaction): Promise<void> {
     try {
-      await this.em.insert(WagerTransactionRecord, fromWagerTransaction(transaction));
+      // Savepoint (em.transactional aninhado): se a unique falhar, a transação externa continua utilizável
+      // para conferir a causa antes de classificar o erro
+      await this.em.transactional((em) => em.insert(WagerTransactionRecord, fromWagerTransaction(transaction)));
     } catch (error) {
       const constraint = uniqueViolationConstraint(error);
-      // 'unknown': o driver não informou o nome. As outras unique da tabela só colidiriam com UUIDv7 repetido,
-      // então tratar como corrida de idempotência (o use case relê e responde replay ou conflito) é o caminho seguro.
-      if (constraint && (IDEMPOTENCY_CONSTRAINTS.has(constraint) || constraint === 'unknown')) {
+      if (constraint && IDEMPOTENCY_CONSTRAINTS.has(constraint)) {
         throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+      }
+      // 'unknown': o driver não informou o nome. Só é corrida de idempotência se já existir outra transação com a
+      // mesma key ou o mesmo id externo; qualquer outra unique (PK repetida, constraint futura) mantém o erro original.
+      // A linha concorrente já está confirmada: uma violação de unique só acontece depois do commit da outra.
+      if (constraint === 'unknown') {
+        const matches = await this.findIdempotencyMatches(transaction.idempotencyKey, transaction.providerId, transaction.externalTransactionId);
+        if (matches.some((match) => match.id !== transaction.id)) {
+          throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+        }
       }
       throw error;
     }

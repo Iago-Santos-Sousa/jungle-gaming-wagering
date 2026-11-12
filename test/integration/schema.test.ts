@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { DuplicateTransactionError } from '../../src/application/errors';
+import { UnitOfWork } from '../../src/application/ports/repositories';
+import { Money } from '../../src/domain/money/money';
+import { WagerTransaction, WagerTransactionKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { startTestApp, type TestApp } from '../support/test-app';
 
 let ctx: TestApp;
@@ -189,5 +193,36 @@ describe('constraints de wallet_ledger_entries', () => {
     await expect(em.execute(`update wallet_ledger_entries set amount = 1 where transaction_id = ?`, [transactionId])).rejects.toThrow(/append-only/);
     await expect(em.execute(`delete from wallet_ledger_entries where transaction_id = ?`, [transactionId])).rejects.toThrow(/append-only/);
     await expect(em.execute(`truncate wallet_ledger_entries cascade`)).rejects.toThrow(/append-only/);
+  });
+});
+
+describe('insert de transação com unique de idempotência', () => {
+  test('corrida na mesma key vira DuplicateTransactionError e a transação externa continua utilizável (savepoint)', async () => {
+    const walletId = uuid();
+    // Saldo zero: wallet sem ledger é consistente para o trigger de consistência
+    await insertWallet(walletId);
+    const build = (id: string) =>
+      WagerTransaction.create({
+        id,
+        providerId: 'provider-a',
+        externalTransactionId: `race-${walletId}`,
+        idempotencyKey: `provider-a:race-${walletId}`,
+        payloadHash: 'a'.repeat(64),
+        walletId,
+        playerId: uuid(),
+        roundId: 'round-1',
+        gameId: 'game-1',
+        kind: WagerTransactionKind.Bet,
+        money: Money.from({ amount: '10.00', currency: 'BRL' }),
+        createdAt: new Date(),
+      });
+
+    const after = await ctx.app.get(UnitOfWork).transactional(async (scope) => {
+      await scope.transactions.insert(build(uuid()));
+      await expect(scope.transactions.insert(build(uuid()))).rejects.toBeInstanceOf(DuplicateTransactionError);
+      // Sem o savepoint, este comando falharia com "current transaction is aborted"
+      return scope.transactions.findIdempotencyMatches(`provider-a:race-${walletId}`, 'provider-a', `race-${walletId}`);
+    });
+    expect(after).toHaveLength(1);
   });
 });
