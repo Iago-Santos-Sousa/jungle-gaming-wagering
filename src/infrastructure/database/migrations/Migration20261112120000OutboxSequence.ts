@@ -1,4 +1,4 @@
-import { Migration } from '@mikro-orm/migrations';
+import { Migration } from "@mikro-orm/migrations";
 
 // Ordem de publicação da outbox independente de relógio.
 // occurred_at vem do relógio da aplicação e pode andar para trás (ressincronização de NTP ou da VM),
@@ -10,8 +10,12 @@ import { Migration } from '@mikro-orm/migrations';
 // o que só importa para eventos não publicados no momento do deploy. A aplicação nunca grava a coluna.
 export class Migration20261112120000OutboxSequence extends Migration {
   override async up(): Promise<void> {
-    this.addSql(`alter table outbox_messages add column sequence bigint generated always as identity`);
-    this.addSql(`alter table outbox_messages add constraint outbox_messages_sequence_uq unique (sequence)`);
+    this.addSql(
+      `alter table outbox_messages add column sequence bigint generated always as identity`,
+    );
+    this.addSql(
+      `alter table outbox_messages add constraint outbox_messages_sequence_uq unique (sequence)`,
+    );
     // Cabeça de cada agregado e lote reservado em ordem, só entre as pendentes
     this.addSql(`
       create index outbox_messages_pending_aggregate_idx
@@ -20,8 +24,10 @@ export class Migration20261112120000OutboxSequence extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql('drop index if exists outbox_messages_pending_aggregate_idx');
-    this.addSql('alter table outbox_messages drop constraint if exists outbox_messages_sequence_uq');
-    this.addSql('alter table outbox_messages drop column if exists sequence');
+    this.addSql("drop index if exists outbox_messages_pending_aggregate_idx");
+    this.addSql(
+      "alter table outbox_messages drop constraint if exists outbox_messages_sequence_uq",
+    );
+    this.addSql("alter table outbox_messages drop column if exists sequence");
   }
 }

@@ -1,4 +1,4 @@
-import { InvalidTransactionStateError } from '../shared/domain-error';
+import { InvalidTransactionStateError } from "../shared/domain-error";
 
 export interface ReceiveInboxProps {
   messageId: string;
@@ -21,11 +21,22 @@ export class InboxMessage {
   ) {}
 
   static receive(props: ReceiveInboxProps): InboxMessage {
-    return new InboxMessage(props.messageId, props.consumerName, props.payloadHash, props.receivedAt);
+    return new InboxMessage(
+      props.messageId,
+      props.consumerName,
+      props.payloadHash,
+      props.receivedAt,
+    );
   }
 
   static rehydrate(state: InboxMessageState): InboxMessage {
-    return new InboxMessage(state.messageId, state.consumerName, state.payloadHash, state.receivedAt, state.processedAt);
+    return new InboxMessage(
+      state.messageId,
+      state.consumerName,
+      state.payloadHash,
+      state.receivedAt,
+      state.processedAt,
+    );
   }
 
   get processedAt(): Date | undefined {
@@ -42,7 +53,11 @@ export class InboxMessage {
   }
 
   markProcessed(at: Date): void {
-    if (this.isProcessed()) throw new InvalidTransactionStateError(`Inbox message ${this.messageId} already processed`);
+    if (this.isProcessed())
+      throw new InvalidTransactionStateError(
+        `Inbox message ${this.messageId} already processed`,
+      );
+
     this._processedAt = at;
   }
 }

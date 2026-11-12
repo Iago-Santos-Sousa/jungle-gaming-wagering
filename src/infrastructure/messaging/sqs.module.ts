@@ -1,15 +1,28 @@
-import { Global, Inject, Injectable, Module, type OnApplicationShutdown } from '@nestjs/common';
-import { GetQueueAttributesCommand, GetQueueUrlCommand, SQSClient } from '@aws-sdk/client-sqs';
-import { APP_CONFIG, type AppConfig } from '../config/app-config';
+import {
+  Global,
+  Inject,
+  Injectable,
+  Module,
+  type OnApplicationShutdown,
+} from "@nestjs/common";
+import {
+  GetQueueAttributesCommand,
+  GetQueueUrlCommand,
+  SQSClient,
+} from "@aws-sdk/client-sqs";
+import { APP_CONFIG, type AppConfig } from "../config/app-config";
 
-export const SQS_CLIENT = Symbol('SQS_CLIENT');
+export const SQS_CLIENT = Symbol("SQS_CLIENT");
 
 export function createSqsClient(config: AppConfig): SQSClient {
   const { sqs } = config;
   return new SQSClient({
     region: sqs.region,
     endpoint: sqs.endpoint,
-    credentials: { accessKeyId: sqs.accessKeyId, secretAccessKey: sqs.secretAccessKey },
+    credentials: {
+      accessKeyId: sqs.accessKeyId,
+      secretAccessKey: sqs.secretAccessKey,
+    },
     // O SDK já faz retry com backoff para erros de rede e throttling
     maxAttempts: 3,
   });
@@ -34,11 +47,16 @@ export class SqsQueueResolver {
   // Verificação de alcance usada pelo readiness: sempre faz uma chamada real ao SQS, mesmo com a URL em cache
   async ping(queueName: string): Promise<void> {
     const QueueUrl = await this.getUrl(queueName);
-    await this.client.send(new GetQueueAttributesCommand({ QueueUrl, AttributeNames: ['QueueArn'] }));
+    await this.client.send(
+      new GetQueueAttributesCommand({ QueueUrl, AttributeNames: ["QueueArn"] }),
+    );
   }
 
   private async resolve(queueName: string): Promise<string> {
-    const { QueueUrl } = await this.client.send(new GetQueueUrlCommand({ QueueName: queueName }));
+    const { QueueUrl } = await this.client.send(
+      new GetQueueUrlCommand({ QueueName: queueName }),
+    );
+
     if (!QueueUrl) throw new Error(`Queue ${queueName} not found`);
     return QueueUrl;
   }

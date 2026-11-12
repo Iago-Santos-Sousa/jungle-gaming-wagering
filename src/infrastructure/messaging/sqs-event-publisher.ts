@@ -1,9 +1,13 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { SendMessageBatchCommand, type SQSClient } from '@aws-sdk/client-sqs';
-import { EventPublisher, type PublishOptions, type PublishResult } from '../../application/ports/event-publisher';
-import type { OutboxMessage } from '../../domain/messaging/outbox-message';
-import { APP_CONFIG, type AppConfig } from '../config/app-config';
-import { SQS_CLIENT, SqsQueueResolver } from './sqs.module';
+import { Inject, Injectable } from "@nestjs/common";
+import { SendMessageBatchCommand, type SQSClient } from "@aws-sdk/client-sqs";
+import {
+  EventPublisher,
+  type PublishOptions,
+  type PublishResult,
+} from "../../application/ports/event-publisher";
+import type { OutboxMessage } from "../../domain/messaging/outbox-message";
+import { APP_CONFIG, type AppConfig } from "../config/app-config";
+import { SQS_CLIENT, SqsQueueResolver } from "./sqs.module";
 
 // Limite do SQS por chamada de SendMessageBatch
 const SQS_BATCH_LIMIT = 10;
@@ -26,9 +30,13 @@ export class SqsEventPublisher extends EventPublisher {
   // chamada; o use case para de abrir rodadas na metade do lease, então o ciclo não passa do lease.
   // Os lotes de uma mesma rodada vão em paralelo: não há dois eventos do mesmo agregado na rodada, e agregados
   // diferentes não têm ordem entre si. As rodadas seguem em sequência.
-  async publish(messages: readonly OutboxMessage[], options: PublishOptions = {}): Promise<PublishResult> {
+  async publish(
+    messages: readonly OutboxMessage[],
+    options: PublishOptions = {},
+  ): Promise<PublishResult> {
     const result: PublishResult = { published: [], failed: [], skipped: [] };
     const queues = new Map<string, OutboxMessage[]>();
+
     for (const message of messages) {
       const queue = queues.get(message.aggregateId);
       if (queue) queue.push(message);
@@ -41,25 +49,43 @@ export class SqsEventPublisher extends EventPublisher {
         for (const queue of queues.values()) result.skipped.push(...queue);
         break;
       }
+
       const round = [...queues.values()].map((queue) => queue[0]!);
       const failedBefore = result.failed.length;
       const chunks: OutboxMessage[][] = [];
-      for (let start = 0; start < round.length; start += SQS_BATCH_LIMIT) chunks.push(round.slice(start, start + SQS_BATCH_LIMIT));
-      await Promise.all(chunks.map((chunk) => this.publishChunk(chunk, result)));
+
+      for (let start = 0; start < round.length; start += SQS_BATCH_LIMIT)
+        chunks.push(round.slice(start, start + SQS_BATCH_LIMIT));
+
+      await Promise.all(
+        chunks.map((chunk) => this.publishChunk(chunk, result)),
+      );
+
       // Agregado com falha nesta rodada: os seguintes dele não são enviados neste ciclo
-      const blocked = new Set(result.failed.slice(failedBefore).map(({ message }) => message.aggregateId));
+      const blocked = new Set(
+        result.failed
+          .slice(failedBefore)
+          .map(({ message }) => message.aggregateId),
+      );
+
       for (const [aggregateId, queue] of queues) {
         queue.shift();
         if (blocked.has(aggregateId)) result.skipped.push(...queue);
-        if (blocked.has(aggregateId) || queue.length === 0) queues.delete(aggregateId);
+        if (blocked.has(aggregateId) || queue.length === 0)
+          queues.delete(aggregateId);
       }
     }
     return result;
   }
 
-  private async publishChunk(chunk: readonly OutboxMessage[], result: PublishResult): Promise<void> {
+  private async publishChunk(
+    chunk: readonly OutboxMessage[],
+    result: PublishResult,
+  ): Promise<void> {
     try {
-      const QueueUrl = await this.queues.getUrl(this.config.sqs.eventsQueueName);
+      const QueueUrl = await this.queues.getUrl(
+        this.config.sqs.eventsQueueName,
+      );
       const response = await this.client.send(
         new SendMessageBatchCommand({
           QueueUrl,
@@ -68,11 +94,20 @@ export class SqsEventPublisher extends EventPublisher {
             MessageBody: JSON.stringify(message.payload),
             MessageGroupId: message.aggregateId,
             MessageDeduplicationId: message.id,
-            MessageAttributes: { eventType: { DataType: 'String', StringValue: message.eventType } },
+            MessageAttributes: {
+              eventType: { DataType: "String", StringValue: message.eventType },
+            },
           })),
         }),
       );
-      const failedById = new Map((response.Failed ?? []).map((entry) => [entry.Id, entry.Message ?? entry.Code ?? 'unknown error']));
+
+      const failedById = new Map(
+        (response.Failed ?? []).map((entry) => [
+          entry.Id,
+          entry.Message ?? entry.Code ?? "unknown error",
+        ]),
+      );
+
       chunk.forEach((message, index) => {
         const error = failedById.get(`e${index}`);
         if (error) result.failed.push({ message, error });
@@ -81,7 +116,8 @@ export class SqsEventPublisher extends EventPublisher {
     } catch (error) {
       // Broker indisponível: o lote inteiro volta para nova tentativa com backoff
       const reason = error instanceof Error ? error.message : String(error);
-      for (const message of chunk) result.failed.push({ message, error: reason });
+      for (const message of chunk)
+        result.failed.push({ message, error: reason });
     }
   }
 }

@@ -1,11 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { PinoLogger } from 'nestjs-pino';
-import type { RetryPolicy } from '../../domain/shared/retry-policy';
-import { EventPublisher } from '../ports/event-publisher';
-import { UnitOfWork } from '../ports/repositories';
-import { Clock, WageringMetrics } from '../ports/system';
+import { Inject, Injectable } from "@nestjs/common";
+import { PinoLogger } from "nestjs-pino";
+import type { RetryPolicy } from "../../domain/shared/retry-policy";
+import { EventPublisher } from "../ports/event-publisher";
+import { UnitOfWork } from "../ports/repositories";
+import { Clock, WageringMetrics } from "../ports/system";
 
-export const OUTBOX_RETRY_POLICY = Symbol('OUTBOX_RETRY_POLICY');
+export const OUTBOX_RETRY_POLICY = Symbol("OUTBOX_RETRY_POLICY");
 
 export interface OutboxPublishOptions {
   batchSize: number;
@@ -13,17 +13,11 @@ export interface OutboxPublishOptions {
 }
 
 export interface OutboxPublishCycle {
-  // Mensagens reservadas no ciclo; igual ao batchSize indica que provavelmente há mais trabalho
   claimed: number;
   published: number;
-  // Falhas reais do broker; com falha o ciclo não conta como progresso e o worker espera o intervalo
   failed: number;
 }
 
-// Publica eventos confirmados da outbox. Vários publishers podem rodar ao mesmo tempo:
-// o claim reserva um prefixo de cada agregado com lease e SKIP LOCKED, então cada agregado tem um único publisher
-// por vez e seus eventos saem em ordem. Um lease vencido volta a ficar disponível, e o token do lease impede que um
-// publisher atrasado libere ou reagende linhas que outro já assumiu.
 @Injectable()
 export class PublishOutboxUseCase {
   constructor(
@@ -37,43 +31,59 @@ export class PublishOutboxUseCase {
     logger.setContext(PublishOutboxUseCase.name);
   }
 
-  // shouldStop: pedido de shutdown; o publisher para entre rodadas e o ciclo confirma antes de o ORM fechar.
-  // O mesmo corte vale quando metade do lease já passou.
-  async publishBatch(options: OutboxPublishOptions, shouldStop?: () => boolean): Promise<OutboxPublishCycle> {
-    // Transação curta só para o claim: o lock das cabeças segura o agregado até o lease ficar visível
-    const { leaseUntil, messages: claimed } = await this.uow.transactional((scope) =>
-      scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs),
+  async publishBatch(
+    options: OutboxPublishOptions,
+    shouldStop?: () => boolean,
+  ): Promise<OutboxPublishCycle> {
+    const { leaseUntil, messages: claimed } = await this.uow.transactional(
+      (scope) =>
+        scope.outbox.claimDue(
+          this.clock.now(),
+          options.batchSize,
+          options.leaseMs,
+        ),
     );
     if (claimed.length === 0) return { claimed: 0, published: 0, failed: 0 };
 
-    // Nenhuma rodada começa depois da metade do lease: com o broker lento, um agregado com muitos eventos levaria
-    // mais que o lease, e outro publisher assumiria a cabeça ainda não confirmada enquanto este envia os seguintes
     const roundDeadline = leaseUntil.getTime() - options.leaseMs / 2;
-    const stop = () => shouldStop?.() === true || this.clock.now().getTime() >= roundDeadline;
 
-    // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed, skipped } = await this.publisher.publish(claimed, { shouldStop: stop });
+    const stop = () =>
+      shouldStop?.() === true || this.clock.now().getTime() >= roundDeadline;
+
+    const { published, failed, skipped } = await this.publisher.publish(
+      claimed,
+      { shouldStop: stop },
+    );
+
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
-    // Só falha real ganha tentativa, backoff e last_error; a cabeça com backoff continua segurando o agregado
-    for (const { message } of failed) message.scheduleRetry(now, this.retryPolicy);
+    for (const { message } of failed)
+      message.scheduleRetry(now, this.retryPolicy);
 
-    // Confirmação numa transação: a promoção de cabeça usa o mesmo advisory lock do insert da outbox
     await this.uow.transactional(async (scope) => {
       await scope.outbox.markPublished(published, leaseUntil);
       await scope.outbox.scheduleRetries(failed, leaseUntil);
-      // Bloqueadas nunca foram enviadas: só devolvem o lease
       await scope.outbox.releaseLease(skipped, leaseUntil);
     });
 
     if (failed.length > 0) {
-      for (let i = 0; i < failed.length; i++) this.metrics.retry('outbox');
+      for (let i = 0; i < failed.length; i++) this.metrics.retry("outbox");
       this.logger.warn(
-        { failed: failed.length, skipped: skipped.length, published: published.length, error: failed[0]?.error },
-        'outbox publish partially failed',
+        {
+          failed: failed.length,
+          skipped: skipped.length,
+          published: published.length,
+          error: failed[0]?.error,
+        },
+        "outbox publish partially failed",
       );
     }
-    return { claimed: claimed.length, published: published.length, failed: failed.length };
+
+    return {
+      claimed: claimed.length,
+      published: published.length,
+      failed: failed.length,
+    };
   }
 }

@@ -1,4 +1,4 @@
-import { addMilliseconds } from 'date-fns';
+import { addMilliseconds } from "date-fns";
 
 // Backoff exponencial com teto: delay = min(base × 2^(attempt-1), max)
 export class RetryPolicy {

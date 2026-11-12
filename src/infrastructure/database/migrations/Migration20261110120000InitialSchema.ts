@@ -1,4 +1,4 @@
-import { Migration } from '@mikro-orm/migrations';
+import { Migration } from "@mikro-orm/migrations";
 
 // Schema inicial. As garantias de unicidade, imutabilidade e não negatividade vivem aqui,
 // no banco, e não só no código da aplicação.
@@ -81,7 +81,9 @@ export class Migration20261110120000InitialSchema extends Migration {
       create index wager_transactions_pending_by_reference_idx
         on wager_transactions (provider_id, reference_external_transaction_id)
         where status = 'PENDING_REFERENCE'`);
-    this.addSql(`create index wager_transactions_wallet_idx on wager_transactions (wallet_id, created_at)`);
+    this.addSql(
+      `create index wager_transactions_wallet_idx on wager_transactions (wallet_id, created_at)`,
+    );
 
     // Estado terminal é imutável e campos de identidade nunca mudam; exclusão é proibida
     this.addSql(`
@@ -227,16 +229,18 @@ export class Migration20261110120000InitialSchema extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql('drop table if exists outbox_messages');
-    this.addSql('drop table if exists inbox_messages');
-    this.addSql('drop trigger if exists wallets_ledger_consistency_trg on wallets');
-    this.addSql('drop trigger if exists wallets_guard_trg on wallets');
-    this.addSql('drop table if exists wallet_ledger_entries');
-    this.addSql('drop table if exists wager_transactions');
-    this.addSql('drop table if exists wallets');
-    this.addSql('drop function if exists wallets_ledger_consistency()');
-    this.addSql('drop function if exists wallets_guard()');
-    this.addSql('drop function if exists wallet_ledger_entries_append_only()');
-    this.addSql('drop function if exists wager_transactions_guard()');
+    this.addSql("drop table if exists outbox_messages");
+    this.addSql("drop table if exists inbox_messages");
+    this.addSql(
+      "drop trigger if exists wallets_ledger_consistency_trg on wallets",
+    );
+    this.addSql("drop trigger if exists wallets_guard_trg on wallets");
+    this.addSql("drop table if exists wallet_ledger_entries");
+    this.addSql("drop table if exists wager_transactions");
+    this.addSql("drop table if exists wallets");
+    this.addSql("drop function if exists wallets_ledger_consistency()");
+    this.addSql("drop function if exists wallets_guard()");
+    this.addSql("drop function if exists wallet_ledger_entries_append_only()");
+    this.addSql("drop function if exists wager_transactions_guard()");
   }
 }
