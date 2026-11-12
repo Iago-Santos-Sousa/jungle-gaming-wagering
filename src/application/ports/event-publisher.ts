@@ -9,7 +9,7 @@ export interface PublishResult {
 }
 
 export interface PublishOptions {
-  // Pedido de parada (shutdown): o que ainda não foi enviado volta como skipped, para o ciclo confirmar logo
+  // Pedido de parada (shutdown ou lease perto do fim): o que ainda não foi enviado volta como skipped, para o ciclo confirmar logo
   shouldStop?: () => boolean;
 }
 

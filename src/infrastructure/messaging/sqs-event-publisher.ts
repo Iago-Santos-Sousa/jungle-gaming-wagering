@@ -23,7 +23,7 @@ export class SqsEventPublisher extends EventPublisher {
   // Publica em rodadas: cada rodada envia o próximo evento de cada agregado ainda ativo, em lotes de até 10.
   // Nenhum lote tem dois eventos do mesmo agregado, então uma falha parcial por entrada do SendMessageBatch
   // nunca deixa um evento posterior passar na frente de um anterior. Uma wallet com muitos eventos publica um por
-  // chamada; o claim limita o lote, então o pior caso cabe no lease.
+  // chamada; o use case para de abrir rodadas na metade do lease, então o ciclo não passa do lease.
   // Os lotes de uma mesma rodada vão em paralelo: não há dois eventos do mesmo agregado na rodada, e agregados
   // diferentes não têm ordem entre si. As rodadas seguem em sequência.
   async publish(messages: readonly OutboxMessage[], options: PublishOptions = {}): Promise<PublishResult> {
