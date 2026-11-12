@@ -33,7 +33,7 @@ afterAll(async () => {
 
 async function outboxEventTypes(aggregateIds: string[]): Promise<string[]> {
   const rows = await em.fork().execute<{ event_type: string }[]>(
-    `select event_type from outbox_messages where aggregate_id = any(?::uuid[]) order by occurred_at, event_type`,
+    `select event_type from outbox_messages where aggregate_id = any(?::uuid[]) order by sequence`,
     [`{${aggregateIds.join(',')}}`],
   );
   return rows.map((row) => row.event_type);
