@@ -517,15 +517,18 @@ describe('transactional outbox', () => {
 
   test('commit confirmado e processo morto antes de publicar: outra instância publica após o lease', async () => {
     const wallet = await createWallet(api, '100.00');
-    // Instância A reserva o lote (lease) e morre antes de publicar
-    const { messages: claimed } = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
+    // Instância A reserva o lote (lease longo, para o relógio da VM não expirá-lo antes da hora) e morre antes de publicar
+    const { messages: claimed } = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, 60_000));
     expect(claimed.some((message) => message.aggregateId === wallet.walletId)).toBe(true);
 
     const other = await startTestApp(overrides);
     try {
       const publisher = other.app.get(OutboxPublisherWorker);
+      // Com o lease válido, outra instância não publica nada
       await publisher.runOnce();
       expect(await pendingOutbox()).toBe(claimed.length);
+      // O lease vence e a outra instância assume
+      await expireLeases(claimed.map((message) => message.id));
       await publishAll([publisher]);
       const claimedIds = new Set(claimed.map((m) => m.id));
       const claimedIdsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => claimedIds.has(id));
