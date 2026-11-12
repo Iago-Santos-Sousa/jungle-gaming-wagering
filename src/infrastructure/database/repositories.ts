@@ -89,6 +89,12 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
     return row ? toWagerTransaction(row) : null;
   }
 
+  async findIdempotencyMatches(idempotencyKey: string, providerId: string, externalTransactionId: string): Promise<WagerTransaction[]> {
+    // Cada ramo do OR é coberto por uma constraint unique, então o planner usa os dois índices
+    const rows = await this.em.find(WagerTransactionRecord, { $or: [{ idempotencyKey }, { providerId, externalTransactionId }] });
+    return rows.map(toWagerTransaction);
+  }
+
   async hasProcessedReversal(referenceTransactionId: string): Promise<boolean> {
     const count = await this.em.count(WagerTransactionRecord, {
       referenceTransactionId,

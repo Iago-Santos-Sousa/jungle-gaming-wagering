@@ -177,14 +177,15 @@ export class SubmitWagerTransactionUseCase {
     // Lock da wallet antes de olhar a idempotência: duplicatas concorrentes são serializadas aqui
     const wallet = await scope.wallets.findByIdForUpdate(command.walletId);
 
-    const existing = await scope.transactions.findByIdempotencyKey(command.idempotencyKey);
+    const matches = await scope.transactions.findIdempotencyMatches(command.idempotencyKey, command.providerId, command.externalTransactionId);
+    const existing = matches.find((match) => match.idempotencyKey === command.idempotencyKey);
     if (existing) {
       if (!existing.matchesPayload(payloadHash)) throw new IdempotencyConflictError('Idempotency-Key already used with a different payload');
       this.metrics.duplicateDetected(ctx.source);
       return outcomeOf(existing, true);
     }
-    const sameExternalId = await scope.transactions.findByProviderExternalId(command.providerId, command.externalTransactionId);
-    if (sameExternalId) throw new IdempotencyConflictError('externalTransactionId already used with a different Idempotency-Key');
+    // Sobrou só a linha com o mesmo id externo: outra key para a mesma operação do provedor
+    if (matches.length > 0) throw new IdempotencyConflictError('externalTransactionId already used with a different Idempotency-Key');
 
     // Sem wallet não há onde persistir a transação (FK): rejeição explícita, sem efeito
     if (!wallet) return this.walletNotFound(false);

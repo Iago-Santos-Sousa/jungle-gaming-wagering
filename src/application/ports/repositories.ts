@@ -20,6 +20,8 @@ export interface WagerTransactionRepository {
   findByIdForUpdate(id: string): Promise<WagerTransaction | null>;
   findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | null>;
   findByProviderExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null>;
+  // Uma única consulta pelas duas chaves únicas de idempotência; devolve no máximo 2 transações
+  findIdempotencyMatches(idempotencyKey: string, providerId: string, externalTransactionId: string): Promise<WagerTransaction[]>;
   hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
   // Lança DuplicateTransactionError quando a idempotency key ou o id externo já existem
   insert(transaction: WagerTransaction): Promise<void>;
