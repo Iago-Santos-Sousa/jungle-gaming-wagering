@@ -361,6 +361,34 @@ describe('transactional outbox', () => {
   });
 });
 
+describe('shutdown do consumer', () => {
+  test('mensagem recebida depois do SIGTERM volta para a fila na hora, sem efeito e sem esperar o visibility timeout', async () => {
+    // Fila própria com visibility timeout longo: se a mensagem não fosse devolvida, ficaria invisível por 60s
+    const shutdownQueues = isolatedQueues('shutdown');
+    const instance = await startTestApp({ ...overrides, ...shutdownQueues, SQS_VISIBILITY_TIMEOUT_SECONDS: '60' });
+    try {
+      const url = await queueUrl(sqs, shutdownQueues.SQS_WAGER_QUEUE_NAME!);
+      const wallet = await createWallet(api, '100.00');
+      await sendRaw(sqs, url, JSON.stringify(wagerEnvelope(messageData(wallet, { amount: '10.00' }))), wallet.walletId);
+
+      const stopped = instance.app.get(SqsWagerConsumer);
+      await stopped.beforeApplicationShutdown();
+      expect(await stopped.pollOnce(1)).toBe(1);
+
+      const startedAt = Date.now();
+      const redelivered = await eventually(async () => {
+        const { Messages } = await sqs.send(new ReceiveMessageCommand({ QueueUrl: url, WaitTimeSeconds: 1, MessageSystemAttributeNames: ['ApproximateReceiveCount'] }));
+        return Messages?.length ? Messages : undefined;
+      }, 10_000);
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+      expect(redelivered[0]?.Attributes?.ApproximateReceiveCount).toBe('2');
+      expect(await readWalletState(em, wallet.walletId)).toMatchObject({ balance: '100.00', debits: 0 });
+    } finally {
+      await instance.close();
+    }
+  });
+});
+
 describe('recuperação após reinício', () => {
   test('instância encerrada no meio do processamento: outra assume e o estado final é consistente', async () => {
     const wallet = await createWallet(api, '1000.00');

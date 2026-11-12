@@ -165,7 +165,11 @@ Filas: `wager-transactions.fifo` (entrada), `wager-transactions-dlq.fifo` e `wag
   - **permanente de processamento** (SQLSTATE das classes 22 e 23, como overflow numérico ou violação de constraint, e transição ilegal de estado): DLQ imediata com `reason=permanent_error`, sem gastar as tentativas de retry;
   - **transitória** (lock, banco, timeout) e falhas não classificadas: `ChangeMessageVisibility` com backoff exponencial (2s a 300s) e nova entrega.
 - **Limite de tentativas**: ao atingir `SQS_MAX_RECEIVES` (5) entregas, a própria aplicação envia para a DLQ (`reason=retries_exhausted`) e faz ack. O `RedrivePolicy` da fila fica em `SQS_MAX_RECEIVES + 1` como rede de segurança. Assim o limite não depende do emulador. O envio para a DLQ usa o `MessageId` original como deduplicação, para um crash entre envio e ack não duplicar a mensagem na DLQ.
-- **SIGTERM** (`enableShutdownHooks`, `init: true` e `stop_grace_period: 30s` no compose): o consumer aborta o long polling, conclui as mensagens em andamento até `SHUTDOWN_TIMEOUT_MS` e devolve a visibilidade (`VisibilityTimeout = 0`) das que foram recebidas e ainda não começaram. O ORM só fecha depois, porque os workers param em `beforeApplicationShutdown`.
+- **SIGTERM** (`enableShutdownHooks`, `init: true` e `stop_grace_period: 35s` no compose):
+  - o consumer para de iniciar trabalho novo, mas **não aborta** o `ReceiveMessage` em andamento. Abortar a resposta HTTP poderia descartar mensagens que o broker já entregou, e elas ficariam invisíveis até o visibility timeout. O long polling termina em até `SQS_WAIT_TIME_SECONDS` (10s), e tudo que chega depois do SIGTERM volta para a fila na hora (`VisibilityTimeout = 0`);
+  - as mensagens em andamento são concluídas até `SHUTDOWN_TIMEOUT_MS` (30s). Se o tempo estourar, o consumer devolve a visibilidade delas antes de retornar do hook, ainda com o cliente SQS vivo. Se o commit acontecer depois, o inbox descarta a reentrega;
+  - o boot valida que `SHUTDOWN_TIMEOUT_MS > SQS_WAIT_TIME_SECONDS * 1000 + DB_LOCK_TIMEOUT_MS * 3` (long polling mais o pior caso de espera de lock em todas as tentativas), e o `stop_grace_period` fica acima disso;
+  - o ORM e o cliente SQS só fecham depois, porque os workers param em `beforeApplicationShutdown`.
 - FIFO: grupos (`MessageGroupId = walletId`) em paralelo, mensagens do mesmo grupo em ordem. Ordenação e deduplicação do broker são otimização; a correção vem do banco.
 
 ## 9. Transactional outbox

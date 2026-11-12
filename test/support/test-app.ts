@@ -28,7 +28,8 @@ export function testConfig(overrides: Partial<Record<string, string>> = {}): App
     PENDING_REFERENCE_BASE_DELAY_MS: '100',
     PENDING_REFERENCE_MAX_DELAY_MS: '400',
     PENDING_REFERENCE_MAX_ATTEMPTS: '4',
-    SHUTDOWN_TIMEOUT_MS: '5000',
+    // Precisa cobrir SQS_WAIT_TIME_SECONDS mais DB_LOCK_TIMEOUT_MS em todas as tentativas (validado no loadConfig)
+    SHUTDOWN_TIMEOUT_MS: '20000',
     ...overrides,
   });
 }

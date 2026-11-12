@@ -1,3 +1,5 @@
+import { MAX_TRANSACTION_ATTEMPTS } from '../../application/errors';
+
 // Token de injeção da configuração tipada da aplicação
 export const APP_CONFIG = Symbol('APP_CONFIG');
 
@@ -90,14 +92,27 @@ function readLogLevel(env: Env): LogLevel {
   return raw;
 }
 
+// O shutdown precisa cobrir o long polling em andamento mais o pior caso de uma mensagem esperando lock em todas as tentativas.
+// Com menos que isso, o hook retornaria com trabalho em curso e o ORM fecharia no meio da transação.
+function assertShutdownBudget(config: AppConfig): AppConfig {
+  const required = config.sqs.waitTimeSeconds * 1_000 + config.database.lockTimeoutMs * MAX_TRANSACTION_ATTEMPTS;
+  if (config.shutdownTimeoutMs <= required) {
+    throw new InvalidConfigError(
+      'SHUTDOWN_TIMEOUT_MS',
+      `must be greater than SQS_WAIT_TIME_SECONDS * 1000 + DB_LOCK_TIMEOUT_MS * ${MAX_TRANSACTION_ATTEMPTS} (${required})`,
+    );
+  }
+  return config;
+}
+
 // Lê e valida as variáveis de ambiente uma única vez no boot
 export function loadConfig(env: Env = process.env): AppConfig {
-  return {
+  return assertShutdownBudget({
     nodeEnv: readString(env, 'NODE_ENV', 'development'),
     port: readInt(env, 'PORT', 3000, 1),
     logLevel: readLogLevel(env),
     workersEnabled: readBool(env, 'WORKERS_ENABLED', true),
-    shutdownTimeoutMs: readInt(env, 'SHUTDOWN_TIMEOUT_MS', 20_000),
+    shutdownTimeoutMs: readInt(env, 'SHUTDOWN_TIMEOUT_MS', 30_000),
     database: {
       host: readString(env, 'DB_HOST', 'localhost'),
       port: readInt(env, 'DB_PORT', 5432, 1),
@@ -121,7 +136,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
       consumerName: readString(env, 'SQS_CONSUMER_NAME', 'wager-transactions-consumer'),
       maxReceives: readInt(env, 'SQS_MAX_RECEIVES', 5, 1),
       visibilityTimeoutSeconds: readInt(env, 'SQS_VISIBILITY_TIMEOUT_SECONDS', 30, 1),
-      waitTimeSeconds: readInt(env, 'SQS_WAIT_TIME_SECONDS', 20),
+      waitTimeSeconds: readInt(env, 'SQS_WAIT_TIME_SECONDS', 10),
       batchSize: Math.min(readInt(env, 'SQS_BATCH_SIZE', 10, 1), 10),
       retryBaseDelaySeconds: readInt(env, 'SQS_RETRY_BASE_DELAY_SECONDS', 2, 1),
       // Teto do SQS para ChangeMessageVisibility é 12 horas
@@ -143,5 +158,5 @@ export function loadConfig(env: Env = process.env): AppConfig {
       baseDelayMs: readInt(env, 'PENDING_REFERENCE_BASE_DELAY_MS', 1_000, 1),
       maxDelayMs: readInt(env, 'PENDING_REFERENCE_MAX_DELAY_MS', 300_000, 1),
     },
-  };
+  });
 }

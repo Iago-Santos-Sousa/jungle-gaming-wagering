@@ -14,15 +14,12 @@ import {
   type WagerPayload,
 } from '../../domain/wager-transaction/wager-transaction';
 import type { Wallet } from '../../domain/wallet/wallet';
-import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflictError, ResourceNotFoundError } from '../errors';
+import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflictError, MAX_TRANSACTION_ATTEMPTS, ResourceNotFoundError } from '../errors';
 import { UnitOfWork, type PendingReferenceClaim, type RepositoryScope } from '../ports/repositories';
 import { Clock, IdGenerator, WageringMetrics, type MetricSource } from '../ports/system';
 
 // Política de tentativas para resolver referências fora de ordem (configurável por ambiente)
 export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
-
-// Tentativas totais em conflito de lock ou corrida de inserção antes de devolver erro transitório
-const MAX_TRANSACTION_ATTEMPTS = 3;
 
 export interface SubmitWagerCommand extends WagerPayload {
   idempotencyKey: string;
