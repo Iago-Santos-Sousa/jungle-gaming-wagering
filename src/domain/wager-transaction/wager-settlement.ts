@@ -1,13 +1,15 @@
-import { WalletLedgerEntry } from '../ledger/wallet-ledger-entry';
-import { BalanceLimitExceededError, InsufficientFundsError } from '../shared/domain-error';
-import type { RetryPolicy } from '../shared/retry-policy';
-import type { Wallet } from '../wallet/wallet';
-import { FailureCode } from './failure-code';
-import type { WagerTransaction } from './wager-transaction';
+import { WalletLedgerEntry } from "../ledger/wallet-ledger-entry";
+import {
+  BalanceLimitExceededError,
+  InsufficientFundsError,
+} from "../shared/domain-error";
+import type { RetryPolicy } from "../shared/retry-policy";
+import type { Wallet } from "../wallet/wallet";
+import { FailureCode } from "./failure-code";
+import type { WagerTransaction } from "./wager-transaction";
 
 export interface SettlementInput {
   transaction: WagerTransaction;
-  // Wallet já travada pela camada de aplicação
   wallet: Wallet;
   reference: WagerTransaction | null;
   referenceAlreadyReversed: boolean;
@@ -22,7 +24,9 @@ export interface SettlementResult {
 
 // Regras de negócio de BET, WIN, LOSS, REFUND e ROLLBACK, sem I/O.
 // Muta a transação e a wallet recebidas e devolve o lançamento quando o saldo muda.
-export function settleWagerTransaction(input: SettlementInput): SettlementResult {
+export function settleWagerTransaction(
+  input: SettlementInput,
+): SettlementResult {
   const { transaction, wallet, now } = input;
 
   if (transaction.playerId !== wallet.playerId) {
@@ -37,18 +41,27 @@ export function settleWagerTransaction(input: SettlementInput): SettlementResult
   let reference: WagerTransaction | undefined;
   if (transaction.referenceExternalTransactionId) {
     const check = transaction.checkReference(input.reference);
-    if (check.outcome === 'missing') {
+
+    if (check.outcome === "missing") {
       deferForReference(input);
       return {};
     }
-    if (check.outcome === 'invalid') {
+
+    if (check.outcome === "invalid") {
       transaction.reject(check.failureCode, now, wallet.balance);
       return {};
     }
+
     if (transaction.isReversal() && input.referenceAlreadyReversed) {
-      transaction.reject(FailureCode.ReferenceAlreadyReversed, now, wallet.balance);
+      transaction.reject(
+        FailureCode.ReferenceAlreadyReversed,
+        now,
+        wallet.balance,
+      );
+
       return {};
     }
+
     reference = check.reference;
   }
 
@@ -61,6 +74,7 @@ export function settleWagerTransaction(input: SettlementInput): SettlementResult
   try {
     const movement = wallet.apply(direction, transaction.money, now);
     transaction.markProcessed(reference?.id, now, movement.balanceAfter);
+
     return {
       ledgerEntry: WalletLedgerEntry.fromMovement({
         id: input.newLedgerEntryId(),
@@ -75,19 +89,33 @@ export function settleWagerTransaction(input: SettlementInput): SettlementResult
       transaction.reject(FailureCode.BalanceLimitExceeded, now, wallet.balance);
       return {};
     }
+
     if (!(error instanceof InsufficientFundsError)) throw error;
+
     // Reversão sem saldo é operacionalmente diferente de aposta sem saldo
-    const code = transaction.isReversal() ? FailureCode.ReversalInsufficientFunds : FailureCode.InsufficientFunds;
+    const code = transaction.isReversal()
+      ? FailureCode.ReversalInsufficientFunds
+      : FailureCode.InsufficientFunds;
+
     transaction.reject(code, now, wallet.balance);
     return {};
   }
 }
 
-function deferForReference({ transaction, wallet, referencePolicy, now }: SettlementInput): void {
+function deferForReference({
+  transaction,
+  wallet,
+  referencePolicy,
+  now,
+}: SettlementInput): void {
   const attempt = transaction.referenceAttempts + 1;
   if (referencePolicy.isExhausted(attempt)) {
     transaction.reject(FailureCode.ReferenceNotFound, now, wallet.balance);
     return;
   }
-  transaction.markPendingReference(referencePolicy.nextAttemptAt(now, attempt), wallet.balance);
+
+  transaction.markPendingReference(
+    referencePolicy.nextAttemptAt(now, attempt),
+    wallet.balance,
+  );
 }

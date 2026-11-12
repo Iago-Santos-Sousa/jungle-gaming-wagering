@@ -25,7 +25,6 @@ export interface IntegrationEventEnvelope<T> {
   data: T;
 }
 
-// Envelope de evento de integração. eventType e version ficam no tipo de cada subclasse.
 export abstract class IntegrationEvent<T> {
   abstract readonly eventType: string;
   abstract readonly version: number;

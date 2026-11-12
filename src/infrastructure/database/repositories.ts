@@ -1,6 +1,10 @@
-import { LockMode } from '@mikro-orm/core';
-import type { EntityManager } from '@mikro-orm/postgresql';
-import { ConcurrencyConflictError, DuplicateTransactionError, WalletAlreadyExistsError } from '../../application/errors';
+import { LockMode } from "@mikro-orm/core";
+import type { EntityManager } from "@mikro-orm/postgresql";
+import {
+  ConcurrencyConflictError,
+  DuplicateTransactionError,
+  WalletAlreadyExistsError,
+} from "../../application/errors";
 import type {
   InboxRepository,
   LedgerPageQuery,
@@ -13,15 +17,26 @@ import type {
   RepositoryScope,
   WagerTransactionRepository,
   WalletRepository,
-} from '../../application/ports/repositories';
-import type { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import { InboxMessage } from '../../domain/messaging/inbox-message';
-import type { OutboxMessage } from '../../domain/messaging/outbox-message';
-import { Money } from '../../domain/money/money';
-import { WagerTransactionKind, WagerTransactionStatus, type WagerTransaction } from '../../domain/wager-transaction/wager-transaction';
-import type { Wallet } from '../../domain/wallet/wallet';
-import { uniqueViolationConstraint } from './database-errors';
-import { InboxMessageRecord, LedgerEntryRecord, OutboxMessageRecord, WagerTransactionRecord, WalletRecord, type OutboxMessageRow } from './entities';
+} from "../../application/ports/repositories";
+import type { WalletLedgerEntry } from "../../domain/ledger/wallet-ledger-entry";
+import { InboxMessage } from "../../domain/messaging/inbox-message";
+import type { OutboxMessage } from "../../domain/messaging/outbox-message";
+import { Money } from "../../domain/money/money";
+import {
+  WagerTransactionKind,
+  WagerTransactionStatus,
+  type WagerTransaction,
+} from "../../domain/wager-transaction/wager-transaction";
+import type { Wallet } from "../../domain/wallet/wallet";
+import { uniqueViolationConstraint } from "./database-errors";
+import {
+  InboxMessageRecord,
+  LedgerEntryRecord,
+  OutboxMessageRecord,
+  WagerTransactionRecord,
+  WalletRecord,
+  type OutboxMessageRow,
+} from "./entities";
 import {
   fromLedgerEntry,
   fromOutboxMessage,
@@ -31,10 +46,16 @@ import {
   toOutboxMessage,
   toWagerTransaction,
   toWallet,
-} from './mappers';
+} from "./mappers";
 
-const REVERSAL_KINDS = [WagerTransactionKind.Refund, WagerTransactionKind.Rollback];
-const IDEMPOTENCY_CONSTRAINTS = new Set(['wager_transactions_idempotency_key_uq', 'wager_transactions_provider_external_uq']);
+const REVERSAL_KINDS = [
+  WagerTransactionKind.Refund,
+  WagerTransactionKind.Rollback,
+];
+const IDEMPOTENCY_CONSTRAINTS = new Set([
+  "wager_transactions_idempotency_key_uq",
+  "wager_transactions_provider_external_uq",
+]);
 
 class MikroOrmWalletRepository implements WalletRepository {
   constructor(private readonly em: EntityManager) {}
@@ -45,8 +66,12 @@ class MikroOrmWalletRepository implements WalletRepository {
   }
 
   async findByIdForUpdate(id: string): Promise<Wallet | null> {
-    // refresh garante que o valor lido é o da linha travada, não um cache do identity map
-    const row = await this.em.findOne(WalletRecord, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true });
+    const row = await this.em.findOne(
+      WalletRecord,
+      { id },
+      { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+    );
+
     return row ? toWallet(row) : null;
   }
 
@@ -54,7 +79,9 @@ class MikroOrmWalletRepository implements WalletRepository {
     try {
       await this.em.insert(WalletRecord, fromWallet(wallet));
     } catch (error) {
-      if (uniqueViolationConstraint(error) === 'wallets_player_currency_uq') throw new WalletAlreadyExistsError(wallet.playerId, wallet.currency);
+      if (uniqueViolationConstraint(error) === "wallets_player_currency_uq")
+        throw new WalletAlreadyExistsError(wallet.playerId, wallet.currency);
+
       throw error;
     }
   }
@@ -63,9 +90,17 @@ class MikroOrmWalletRepository implements WalletRepository {
     const affected = await this.em.nativeUpdate(
       WalletRecord,
       { id: wallet.id, version: expectedVersion },
-      { balanceAmount: wallet.balance.toString(), version: wallet.version, updatedAt: wallet.updatedAt },
+      {
+        balanceAmount: wallet.balance.toString(),
+        version: wallet.version,
+        updatedAt: wallet.updatedAt,
+      },
     );
-    if (affected !== 1) throw new ConcurrencyConflictError(`Wallet ${wallet.id} changed concurrently (expected version ${expectedVersion})`);
+
+    if (affected !== 1)
+      throw new ConcurrencyConflictError(
+        `Wallet ${wallet.id} changed concurrently (expected version ${expectedVersion})`,
+      );
   }
 }
 
@@ -78,23 +113,46 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
   }
 
   async findByIdForUpdate(id: string): Promise<WagerTransaction | null> {
-    const row = await this.em.findOne(WagerTransactionRecord, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true });
+    const row = await this.em.findOne(
+      WagerTransactionRecord,
+      { id },
+      { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
+    );
+
     return row ? toWagerTransaction(row) : null;
   }
 
-  async findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | null> {
-    const row = await this.em.findOne(WagerTransactionRecord, { idempotencyKey });
+  async findByIdempotencyKey(
+    idempotencyKey: string,
+  ): Promise<WagerTransaction | null> {
+    const row = await this.em.findOne(WagerTransactionRecord, {
+      idempotencyKey,
+    });
+
     return row ? toWagerTransaction(row) : null;
   }
 
-  async findByProviderExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | null> {
-    const row = await this.em.findOne(WagerTransactionRecord, { providerId, externalTransactionId });
+  async findByProviderExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | null> {
+    const row = await this.em.findOne(WagerTransactionRecord, {
+      providerId,
+      externalTransactionId,
+    });
+
     return row ? toWagerTransaction(row) : null;
   }
 
-  async findIdempotencyMatches(idempotencyKey: string, providerId: string, externalTransactionId: string): Promise<WagerTransaction[]> {
-    // Cada ramo do OR é coberto por uma constraint unique, então o planner usa os dois índices
-    const rows = await this.em.find(WagerTransactionRecord, { $or: [{ idempotencyKey }, { providerId, externalTransactionId }] });
+  async findIdempotencyMatches(
+    idempotencyKey: string,
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction[]> {
+    const rows = await this.em.find(WagerTransactionRecord, {
+      $or: [{ idempotencyKey }, { providerId, externalTransactionId }],
+    });
+
     return rows.map(toWagerTransaction);
   }
 
@@ -104,28 +162,37 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
       kind: { $in: REVERSAL_KINDS },
       status: WagerTransactionStatus.Processed,
     });
+
     return count > 0;
   }
 
   async insert(transaction: WagerTransaction): Promise<void> {
     try {
-      // Savepoint (em.transactional aninhado): se a unique falhar, a transação externa continua utilizável
-      // para conferir a causa antes de classificar o erro
-      await this.em.transactional((em) => em.insert(WagerTransactionRecord, fromWagerTransaction(transaction)));
+      await this.em.transactional((em) =>
+        em.insert(WagerTransactionRecord, fromWagerTransaction(transaction)),
+      );
     } catch (error) {
       const constraint = uniqueViolationConstraint(error);
       if (constraint && IDEMPOTENCY_CONSTRAINTS.has(constraint)) {
-        throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+        throw new DuplicateTransactionError(
+          `Transaction ${transaction.idempotencyKey} inserted concurrently`,
+        );
       }
-      // 'unknown': o driver não informou o nome. Só é corrida de idempotência se já existir outra transação com a
-      // mesma key ou o mesmo id externo; qualquer outra unique (PK repetida, constraint futura) mantém o erro original.
-      // A linha concorrente já está confirmada: uma violação de unique só acontece depois do commit da outra.
-      if (constraint === 'unknown') {
-        const matches = await this.findIdempotencyMatches(transaction.idempotencyKey, transaction.providerId, transaction.externalTransactionId);
+
+      if (constraint === "unknown") {
+        const matches = await this.findIdempotencyMatches(
+          transaction.idempotencyKey,
+          transaction.providerId,
+          transaction.externalTransactionId,
+        );
+
         if (matches.some((match) => match.id !== transaction.id)) {
-          throw new DuplicateTransactionError(`Transaction ${transaction.idempotencyKey} inserted concurrently`);
+          throw new DuplicateTransactionError(
+            `Transaction ${transaction.idempotencyKey} inserted concurrently`,
+          );
         }
       }
+
       throw error;
     }
   }
@@ -148,10 +215,13 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
     );
   }
 
-  async claimDuePendingReferences(now: Date, limit: number, leaseMs: number): Promise<PendingReferenceClaim[]> {
+  async claimDuePendingReferences(
+    now: Date,
+    limit: number,
+    leaseMs: number,
+  ): Promise<PendingReferenceClaim[]> {
     const claimedUntil = new Date(now.getTime() + leaseMs);
-    // SKIP LOCKED: instâncias concorrentes pegam conjuntos disjuntos, e o lease vencido torna a linha disponível de novo.
-    // Usa o índice parcial de next_attempt_at em PENDING_REFERENCE.
+
     const rows = await this.em.execute<{ id: string }[]>(
       `update wager_transactions t
           set next_attempt_at = ?
@@ -165,13 +235,25 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
        returning t.id`,
       [claimedUntil, now, limit],
     );
+
     return rows.map((row) => ({ transactionId: row.id, claimedUntil }));
   }
 
-  async expeditePendingDependents(walletId: string, providerId: string, referenceExternalTransactionId: string, now: Date): Promise<number> {
+  async expeditePendingDependents(
+    walletId: string,
+    providerId: string,
+    referenceExternalTransactionId: string,
+    now: Date,
+  ): Promise<number> {
     return this.em.nativeUpdate(
       WagerTransactionRecord,
-      { walletId, providerId, referenceExternalTransactionId, status: WagerTransactionStatus.PendingReference, nextAttemptAt: { $gt: now } },
+      {
+        walletId,
+        providerId,
+        referenceExternalTransactionId,
+        status: WagerTransactionStatus.PendingReference,
+        nextAttemptAt: { $gt: now },
+      },
       { nextAttemptAt: now },
     );
   }
@@ -191,14 +273,25 @@ class MikroOrmLedgerRepository implements LedgerRepository {
     await this.em.insert(LedgerEntryRecord, fromLedgerEntry(entry));
   }
 
-  async listByWallet({ walletId, beforeVersion, limit }: LedgerPageQuery): Promise<WalletLedgerEntry[]> {
-    const where = beforeVersion === undefined ? { walletId } : { walletId, walletVersion: { $lt: beforeVersion } };
-    const rows = await this.em.find(LedgerEntryRecord, where, { orderBy: { walletVersion: 'desc' }, limit });
+  async listByWallet({
+    walletId,
+    beforeVersion,
+    limit,
+  }: LedgerPageQuery): Promise<WalletLedgerEntry[]> {
+    const where =
+      beforeVersion === undefined
+        ? { walletId }
+        : { walletId, walletVersion: { $lt: beforeVersion } };
+
+    const rows = await this.em.find(LedgerEntryRecord, where, {
+      orderBy: { walletVersion: "desc" },
+      limit,
+    });
+
     return rows.map(toLedgerEntry);
   }
 
   async summarize(walletId: string): Promise<LedgerSummary | null> {
-    // Um único statement: saldo materializado e soma do ledger vêm do mesmo snapshot
     const rows = await this.em.execute<SummaryRow[]>(
       `select w.balance_amount::text as stored_balance,
               w.currency,
@@ -210,12 +303,18 @@ class MikroOrmLedgerRepository implements LedgerRepository {
         group by w.id`,
       [walletId],
     );
+
     const row = rows[0];
     if (!row) return null;
+
     const currency = row.currency.trim();
+
     return {
       storedBalance: Money.rehydrate({ amount: row.stored_balance, currency }),
-      calculatedBalance: Money.rehydrate({ amount: row.calculated_balance, currency }),
+      calculatedBalance: Money.rehydrate({
+        amount: row.calculated_balance,
+        currency,
+      }),
       entries: Number(row.entries),
     };
   }
@@ -225,28 +324,42 @@ class MikroOrmInboxRepository implements InboxRepository {
   constructor(private readonly em: EntityManager) {}
 
   async register(message: InboxMessage): Promise<InboxMessage | null> {
-    // ON CONFLICT DO NOTHING: uma entrega concorrente da mesma mensagem espera o commit da outra e vira duplicata
     const rows = await this.em.execute<{ message_id: string }[]>(
       `insert into inbox_messages (consumer_name, message_id, payload_hash, received_at, processed_at)
        values (?, ?, ?, ?, ?)
        on conflict (consumer_name, message_id) do nothing
        returning message_id`,
-      [message.consumerName, message.messageId, message.payloadHash, message.receivedAt, message.processedAt ?? null],
+      [
+        message.consumerName,
+        message.messageId,
+        message.payloadHash,
+        message.receivedAt,
+        message.processedAt ?? null,
+      ],
     );
+
     if (rows.length === 1) return null;
 
-    const [existing] = await this.em.execute<{ payload_hash: string; received_at: Date; processed_at: Date | null }[]>(
+    const [existing] = await this.em.execute<
+      { payload_hash: string; received_at: Date; processed_at: Date | null }[]
+    >(
       `select payload_hash, received_at, processed_at from inbox_messages where consumer_name = ? and message_id = ?`,
       [message.consumerName, message.messageId],
     );
-    // Conflito sem linha visível só acontece se a outra entrega reverteu no meio: tentar de novo resolve
-    if (!existing) throw new ConcurrencyConflictError(`Inbox message ${message.messageId} changed concurrently`);
+
+    if (!existing)
+      throw new ConcurrencyConflictError(
+        `Inbox message ${message.messageId} changed concurrently`,
+      );
+
     return InboxMessage.rehydrate({
       consumerName: message.consumerName,
       messageId: message.messageId,
       payloadHash: existing.payload_hash.trim(),
       receivedAt: new Date(existing.received_at),
-      processedAt: existing.processed_at ? new Date(existing.processed_at) : undefined,
+      processedAt: existing.processed_at
+        ? new Date(existing.processed_at)
+        : undefined,
     });
   }
 }
@@ -262,7 +375,6 @@ interface RawOutboxRow {
   locked_until: Date | null;
   published_at: Date | null;
   last_error: string | null;
-  // bigint chega como string pelo driver pg
   sequence: string;
   is_head: boolean;
 }
@@ -272,7 +384,10 @@ function fromRawOutbox(row: RawOutboxRow): OutboxMessageRow {
     id: row.id,
     aggregateId: row.aggregate_id,
     eventType: row.event_type,
-    payload: typeof row.payload === 'string' ? (JSON.parse(row.payload) as Record<string, unknown>) : row.payload,
+    payload:
+      typeof row.payload === "string"
+        ? (JSON.parse(row.payload) as Record<string, unknown>)
+        : row.payload,
     occurredAt: new Date(row.occurred_at),
     attempts: row.attempts,
     nextAttemptAt: new Date(row.next_attempt_at),
@@ -289,42 +404,48 @@ const OUTBOX_AGGREGATE_LOCK_NAMESPACE = 7001;
 class MikroOrmOutboxRepository implements OutboxRepository {
   constructor(private readonly em: EntityManager) {}
 
-  // Serializa insert e promoção de cabeça do mesmo agregado. Sempre em ordem crescente, para não haver deadlock
-  // entre transações que travam mais de um agregado; exige transação aberta (lock liberado no commit).
   private async lockAggregates(aggregateIds: readonly string[]): Promise<void> {
     const sorted = [...new Set(aggregateIds)].sort();
     if (sorted.length === 0) return;
+
     await this.em.execute(
       `select pg_advisory_xact_lock(?::int, hashtext(s.aggregate_id))
          from (select unnest(?::text[]) as aggregate_id order by 1) s`,
-      [OUTBOX_AGGREGATE_LOCK_NAMESPACE, `{${sorted.join(',')}}`],
+      [OUTBOX_AGGREGATE_LOCK_NAMESPACE, `{${sorted.join(",")}}`],
     );
   }
 
   async add(messages: readonly OutboxMessage[]): Promise<void> {
     if (messages.length === 0) return;
-    const aggregateIds = [...new Set(messages.map((message) => message.aggregateId))];
+    const aggregateIds = [
+      ...new Set(messages.map((message) => message.aggregateId)),
+    ];
+
     await this.lockAggregates(aggregateIds);
-    // Agregado que já tem pendente mantém a cabeça atual; senão a primeira mensagem nova vira a cabeça
+
     const pending = await this.em.execute<{ aggregate_id: string }[]>(
       `select distinct aggregate_id from outbox_messages where published_at is null and aggregate_id = any(?::uuid[])`,
-      [`{${aggregateIds.join(',')}}`],
+      [`{${aggregateIds.join(",")}}`],
     );
+
     const withHead = new Set(pending.map((row) => row.aggregate_id));
+
     const rows = messages.map((message) => {
       const isHead = !withHead.has(message.aggregateId);
       withHead.add(message.aggregateId);
       return fromOutboxMessage(message, isHead);
     });
+
     await this.em.insertMany(OutboxMessageRecord, rows);
   }
 
-  async claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxClaim> {
+  async claimDue(
+    now: Date,
+    limit: number,
+    leaseMs: number,
+  ): Promise<OutboxClaim> {
     const leaseUntil = new Date(now.getTime() + leaseMs);
-    // 1) Trava a cabeça de até `limit` agregados vencidos e livres. Só as cabeças estão no índice parcial
-    //    outbox_messages_due_head_idx, então a varredura para no limit e nunca passa pelos eventos seguintes de um
-    //    agregado com acúmulo. SKIP LOCKED faz publishers concorrentes pegarem agregados diferentes, e o FOR UPDATE
-    //    reavalia o WHERE (published_at, is_head e lease) na versão mais nova da linha.
+
     const heads = await this.em.execute<{ aggregate_id: string }[]>(
       `select o.aggregate_id
          from outbox_messages o
@@ -337,11 +458,9 @@ class MikroOrmOutboxRepository implements OutboxRepository {
         for update skip locked`,
       [now, now, limit],
     );
+
     if (heads.length === 0) return { leaseUntil, messages: [] };
 
-    // 2) Reserva um prefixo de cada agregado, com teto total de `limit` mensagens. O LATERAL lê no máximo `limit`
-    //    linhas de cada agregado pelo índice (aggregate_id, sequence), sem tocar no resto do acúmulo. Ordenar pela
-    //    posição no agregado garante que toda cabeça entra; a cabeça com lease impede outro publisher de pegar o agregado.
     const rows = await this.em.execute<RawOutboxRow[]>(
       `with picked as (
          select x.id
@@ -361,20 +480,31 @@ class MikroOrmOutboxRepository implements OutboxRepository {
          from picked
         where o.id = picked.id
        returning o.*`,
-      [`{${heads.map((head) => head.aggregate_id).join(',')}}`, limit, limit, leaseUntil],
+      [
+        `{${heads.map((head) => head.aggregate_id).join(",")}}`,
+        limit,
+        limit,
+        leaseUntil,
+      ],
     );
-    // Ordem de publicação pela sequência do banco, nunca pelo relógio (occurred_at pode andar para trás)
+
     const messages = rows
       .sort((a, b) => (BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1))
       .map((row) => toOutboxMessage(fromRawOutbox(row)));
+
     return { leaseUntil, messages };
   }
 
-  async markPublished(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void> {
+  async markPublished(
+    messages: readonly OutboxMessage[],
+    leaseUntil: Date,
+  ): Promise<void> {
     if (messages.length === 0) return;
-    const aggregateIds = [...new Set(messages.map((message) => message.aggregateId))];
+    const aggregateIds = [
+      ...new Set(messages.map((message) => message.aggregateId)),
+    ];
+
     await this.lockAggregates(aggregateIds);
-    // Publicado é fato e sempre é gravado; o lease só é zerado se ainda for deste publisher
     await this.em.execute(
       `update outbox_messages
           set published_at = ?,
@@ -383,9 +513,13 @@ class MikroOrmOutboxRepository implements OutboxRepository {
               locked_until = case when locked_until = ? then null else locked_until end
         where id = any(?::uuid[])
           and published_at is null`,
-      [messages[0]?.publishedAt ?? new Date(), leaseUntil, `{${messages.map((message) => message.id).join(',')}}`],
+      [
+        messages[0]?.publishedAt ?? new Date(),
+        leaseUntil,
+        `{${messages.map((message) => message.id).join(",")}}`,
+      ],
     );
-    // Promove a nova cabeça de cada agregado (a pendente de menor sequence), sob o mesmo advisory lock do insert
+
     await this.em.execute(
       `update outbox_messages
           set is_head = true
@@ -396,15 +530,27 @@ class MikroOrmOutboxRepository implements OutboxRepository {
              and aggregate_id = any(?::uuid[])
            order by aggregate_id, sequence)
           and not is_head`,
-      [`{${aggregateIds.join(',')}}`],
+      [`{${aggregateIds.join(",")}}`],
     );
   }
 
-  async scheduleRetries(failures: readonly OutboxFailure[], leaseUntil: Date): Promise<void> {
+  async scheduleRetries(
+    failures: readonly OutboxFailure[],
+    leaseUntil: Date,
+  ): Promise<void> {
     if (failures.length === 0) return;
-    // Um único UPDATE para o lote inteiro; sem efeito nas linhas cujo lease outro publisher assumiu
-    const values = failures.map(() => '(?::uuid, ?::int, ?::timestamptz, ?::varchar)').join(', ');
-    const params = failures.flatMap(({ message, error }) => [message.id, message.attempts, message.nextAttemptAt ?? new Date(), error.slice(0, 512)]);
+
+    const values = failures
+      .map(() => "(?::uuid, ?::int, ?::timestamptz, ?::varchar)")
+      .join(", ");
+
+    const params = failures.flatMap(({ message, error }) => [
+      message.id,
+      message.attempts,
+      message.nextAttemptAt ?? new Date(),
+      error.slice(0, 512),
+    ]);
+
     await this.em.execute(
       `update outbox_messages o
           set attempts = v.attempts,
@@ -419,11 +565,18 @@ class MikroOrmOutboxRepository implements OutboxRepository {
     );
   }
 
-  async releaseLease(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void> {
+  async releaseLease(
+    messages: readonly OutboxMessage[],
+    leaseUntil: Date,
+  ): Promise<void> {
     if (messages.length === 0) return;
     await this.em.nativeUpdate(
       OutboxMessageRecord,
-      { id: { $in: messages.map((message) => message.id) }, publishedAt: null, lockedUntil: leaseUntil },
+      {
+        id: { $in: messages.map((message) => message.id) },
+        publishedAt: null,
+        lockedUntil: leaseUntil,
+      },
       { lockedUntil: null },
     );
   }
@@ -433,6 +586,7 @@ class MikroOrmOutboxRepository implements OutboxRepository {
       `select extract(epoch from (?::timestamptz - min(occurred_at))) as lag from outbox_messages where published_at is null`,
       [now],
     );
+
     const lag = Number(rows[0]?.lag ?? 0);
     return Number.isFinite(lag) && lag > 0 ? lag : 0;
   }

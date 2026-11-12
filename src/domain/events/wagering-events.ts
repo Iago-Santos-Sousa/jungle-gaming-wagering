@@ -1,10 +1,14 @@
-import type { LedgerDirection } from '../ledger/ledger-direction';
-import type { WalletLedgerEntry } from '../ledger/wallet-ledger-entry';
-import type { MoneyProps } from '../money/money';
-import type { FailureCode } from '../wager-transaction/failure-code';
-import { WagerTransactionStatus, type WagerTransaction, type WagerTransactionKind } from '../wager-transaction/wager-transaction';
-import type { Wallet } from '../wallet/wallet';
-import { IntegrationEvent, type EventContext } from './integration-event';
+import type { LedgerDirection } from "../ledger/ledger-direction";
+import type { WalletLedgerEntry } from "../ledger/wallet-ledger-entry";
+import type { MoneyProps } from "../money/money";
+import type { FailureCode } from "../wager-transaction/failure-code";
+import {
+  WagerTransactionStatus,
+  type WagerTransaction,
+  type WagerTransactionKind,
+} from "../wager-transaction/wager-transaction";
+import type { Wallet } from "../wallet/wallet";
+import { IntegrationEvent, type EventContext } from "./integration-event";
 
 function baseProps<T>(aggregateId: string, ctx: EventContext, data: T) {
   return {
@@ -33,10 +37,14 @@ export interface WagerTransactionProcessedData {
 
 // Qualquer transação aplicada, inclusive LOSS
 export class WagerTransactionProcessed extends IntegrationEvent<WagerTransactionProcessedData> {
-  readonly eventType = 'WagerTransactionProcessed';
+  readonly eventType = "WagerTransactionProcessed";
   readonly version = 1;
 
-  static from(transaction: WagerTransaction, wallet: Wallet, ctx: EventContext): WagerTransactionProcessed {
+  static from(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    ctx: EventContext,
+  ): WagerTransactionProcessed {
     return new WagerTransactionProcessed(
       baseProps(transaction.id, ctx, {
         transactionId: transaction.id,
@@ -67,11 +75,15 @@ export interface WagerTransactionRejectedData {
 }
 
 export class WagerTransactionRejected extends IntegrationEvent<WagerTransactionRejectedData> {
-  readonly eventType = 'WagerTransactionRejected';
+  readonly eventType = "WagerTransactionRejected";
   readonly version = 1;
 
-  static from(transaction: WagerTransaction, ctx: EventContext): WagerTransactionRejected {
-    if (!transaction.failureCode) throw new Error('Rejected transaction must carry a failure code');
+  static from(
+    transaction: WagerTransaction,
+    ctx: EventContext,
+  ): WagerTransactionRejected {
+    if (!transaction.failureCode)
+      throw new Error("Rejected transaction must carry a failure code");
     return new WagerTransactionRejected(
       baseProps(transaction.id, ctx, {
         transactionId: transaction.id,
@@ -99,10 +111,14 @@ export interface WalletBalanceChangedData {
 
 // Somente quando o saldo muda
 export class WalletBalanceChanged extends IntegrationEvent<WalletBalanceChangedData> {
-  readonly eventType = 'WalletBalanceChanged';
+  readonly eventType = "WalletBalanceChanged";
   readonly version = 1;
 
-  static from(wallet: Wallet, entry: WalletLedgerEntry, ctx: EventContext): WalletBalanceChanged {
+  static from(
+    wallet: Wallet,
+    entry: WalletLedgerEntry,
+    ctx: EventContext,
+  ): WalletBalanceChanged {
     return new WalletBalanceChanged(
       baseProps(wallet.id, ctx, {
         walletId: wallet.id,
@@ -129,13 +145,22 @@ export interface WagerTransactionPendingReferenceData {
 }
 
 export class WagerTransactionPendingReference extends IntegrationEvent<WagerTransactionPendingReferenceData> {
-  readonly eventType = 'WagerTransactionPendingReference';
+  readonly eventType = "WagerTransactionPendingReference";
   readonly version = 1;
 
-  static from(transaction: WagerTransaction, ctx: EventContext): WagerTransactionPendingReference {
-    if (!transaction.referenceExternalTransactionId || !transaction.nextAttemptAt) {
-      throw new Error('Pending reference transaction must carry reference id and next attempt');
+  static from(
+    transaction: WagerTransaction,
+    ctx: EventContext,
+  ): WagerTransactionPendingReference {
+    if (
+      !transaction.referenceExternalTransactionId ||
+      !transaction.nextAttemptAt
+    ) {
+      throw new Error(
+        "Pending reference transaction must carry reference id and next attempt",
+      );
     }
+
     return new WagerTransactionPendingReference(
       baseProps(transaction.id, ctx, {
         transactionId: transaction.id,
@@ -143,7 +168,8 @@ export class WagerTransactionPendingReference extends IntegrationEvent<WagerTran
         externalTransactionId: transaction.externalTransactionId,
         walletId: transaction.walletId,
         kind: transaction.kind,
-        referenceExternalTransactionId: transaction.referenceExternalTransactionId,
+        referenceExternalTransactionId:
+          transaction.referenceExternalTransactionId,
         attempts: transaction.referenceAttempts,
         nextAttemptAt: transaction.nextAttemptAt.toISOString(),
       }),
@@ -160,14 +186,24 @@ export function eventsForOutcome(
 ): IntegrationEvent<unknown>[] {
   switch (transaction.status) {
     case WagerTransactionStatus.Processed: {
-      const events: IntegrationEvent<unknown>[] = [WagerTransactionProcessed.from(transaction, wallet, ctx)];
-      if (ledgerEntry) events.push(WalletBalanceChanged.from(wallet, ledgerEntry, ctx));
+      const events: IntegrationEvent<unknown>[] = [
+        WagerTransactionProcessed.from(transaction, wallet, ctx),
+      ];
+
+      if (ledgerEntry)
+        events.push(WalletBalanceChanged.from(wallet, ledgerEntry, ctx));
+
       return events;
     }
+
     case WagerTransactionStatus.Rejected:
       return [WagerTransactionRejected.from(transaction, ctx)];
+
     case WagerTransactionStatus.PendingReference:
-      return transaction.referenceAttempts === 1 ? [WagerTransactionPendingReference.from(transaction, ctx)] : [];
+      return transaction.referenceAttempts === 1
+        ? [WagerTransactionPendingReference.from(transaction, ctx)]
+        : [];
+
     default:
       return [];
   }

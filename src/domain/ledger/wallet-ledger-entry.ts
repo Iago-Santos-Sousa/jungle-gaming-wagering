@@ -1,7 +1,10 @@
-import { Money } from '../money/money';
-import { InvalidArgumentError, UnbalancedLedgerEntryError } from '../shared/domain-error';
-import type { BalanceMovement } from '../wallet/wallet';
-import { LedgerDirection } from './ledger-direction';
+import { Money } from "../money/money";
+import {
+  InvalidArgumentError,
+  UnbalancedLedgerEntryError,
+} from "../shared/domain-error";
+import type { BalanceMovement } from "../wallet/wallet";
+import { LedgerDirection } from "./ledger-direction";
 
 export interface CreateLedgerEntryProps {
   id: string;
@@ -32,14 +35,31 @@ export class WalletLedgerEntry {
 
   // Valida a aritmética do lançamento antes de existir
   static create(props: CreateLedgerEntryProps): WalletLedgerEntry {
-    if (!props.money.isPositive()) throw new InvalidArgumentError('Ledger entry amount must be positive');
-    if (props.balanceAfter.isNegative()) throw new InvalidArgumentError('Ledger entry cannot leave a negative balance');
+    if (!props.money.isPositive())
+      throw new InvalidArgumentError("Ledger entry amount must be positive");
+
+    if (props.balanceAfter.isNegative())
+      throw new InvalidArgumentError(
+        "Ledger entry cannot leave a negative balance",
+      );
+
     const entry = WalletLedgerEntry.rehydrate(props);
-    if (!entry.isBalanced()) throw new UnbalancedLedgerEntryError('balanceBefore ± money must equal balanceAfter');
+
+    if (!entry.isBalanced())
+      throw new UnbalancedLedgerEntryError(
+        "balanceBefore ± money must equal balanceAfter",
+      );
+
     return entry;
   }
 
-  static fromMovement(props: { id: string; walletId: string; transactionId: string; movement: BalanceMovement; createdAt: Date }): WalletLedgerEntry {
+  static fromMovement(props: {
+    id: string;
+    walletId: string;
+    transactionId: string;
+    movement: BalanceMovement;
+    createdAt: Date;
+  }): WalletLedgerEntry {
     const { movement } = props;
     return WalletLedgerEntry.create({
       id: props.id,
@@ -69,11 +89,16 @@ export class WalletLedgerEntry {
   }
 
   isBalanced(): boolean {
-    const expected = this.direction === LedgerDirection.Credit ? this.balanceBefore.add(this.money) : this.balanceBefore.subtract(this.money);
+    const expected =
+      this.direction === LedgerDirection.Credit
+        ? this.balanceBefore.add(this.money)
+        : this.balanceBefore.subtract(this.money);
     return expected.equals(this.balanceAfter);
   }
 
   signedAmount(): Money {
-    return this.direction === LedgerDirection.Credit ? this.money : this.money.negate();
+    return this.direction === LedgerDirection.Credit
+      ? this.money
+      : this.money.negate();
   }
 }

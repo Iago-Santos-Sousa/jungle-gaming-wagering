@@ -1,24 +1,27 @@
-import { LedgerDirection, invertDirection } from '../ledger/ledger-direction';
-import { Money } from '../money/money';
-import { InvalidArgumentError, InvalidTransactionStateError } from '../shared/domain-error';
-import { hashPayload } from '../shared/payload-hash';
-import { FailureCode } from './failure-code';
+import { LedgerDirection, invertDirection } from "../ledger/ledger-direction";
+import { Money } from "../money/money";
+import {
+  InvalidArgumentError,
+  InvalidTransactionStateError,
+} from "../shared/domain-error";
+import { hashPayload } from "../shared/payload-hash";
+import { FailureCode } from "./failure-code";
 
 export enum WagerTransactionKind {
-  Opening = 'OPENING', // interno: crédito de abertura da wallet
-  Bet = 'BET',
-  Win = 'WIN',
-  Loss = 'LOSS',
-  Refund = 'REFUND',
-  Rollback = 'ROLLBACK',
+  Opening = "OPENING",
+  Bet = "BET",
+  Win = "WIN",
+  Loss = "LOSS",
+  Refund = "REFUND",
+  Rollback = "ROLLBACK",
 }
 
 export enum WagerTransactionStatus {
-  Pending = 'PENDING',
-  PendingReference = 'PENDING_REFERENCE',
-  Processed = 'PROCESSED',
-  Rejected = 'REJECTED', // violação de regra de negócio (terminal)
-  Failed = 'FAILED', // erro permanente de infraestrutura (terminal, auditável)
+  Pending = "PENDING",
+  PendingReference = "PENDING_REFERENCE",
+  Processed = "PROCESSED",
+  Rejected = "REJECTED",
+  Failed = "FAILED",
 }
 
 export const SUBMITTABLE_KINDS = [
@@ -37,19 +40,23 @@ const TERMINAL_STATUSES: ReadonlySet<WagerTransactionStatus> = new Set([
   WagerTransactionStatus.Failed,
 ]);
 
-// Tipos que cada kind pode referenciar. REFUND só reverte BET; ROLLBACK reverte BET, WIN ou REFUND.
-const ALLOWED_REFERENCE_KINDS: Readonly<Record<WagerTransactionKind, readonly WagerTransactionKind[]>> = {
+const ALLOWED_REFERENCE_KINDS: Readonly<
+  Record<WagerTransactionKind, readonly WagerTransactionKind[]>
+> = {
   [WagerTransactionKind.Opening]: [],
   [WagerTransactionKind.Bet]: [],
   [WagerTransactionKind.Win]: [WagerTransactionKind.Bet],
   [WagerTransactionKind.Loss]: [WagerTransactionKind.Bet],
   [WagerTransactionKind.Refund]: [WagerTransactionKind.Bet],
-  [WagerTransactionKind.Rollback]: [WagerTransactionKind.Bet, WagerTransactionKind.Win, WagerTransactionKind.Refund],
+  [WagerTransactionKind.Rollback]: [
+    WagerTransactionKind.Bet,
+    WagerTransactionKind.Win,
+    WagerTransactionKind.Refund,
+  ],
 };
 
-export const INTERNAL_PROVIDER_ID = 'internal';
+export const INTERNAL_PROVIDER_ID = "internal";
 
-// Campos de negócio que entram no payloadHash. Header e metadados de transporte ficam de fora.
 export interface WagerPayload {
   providerId: string;
   externalTransactionId: string;
@@ -93,16 +100,19 @@ export interface WagerTransactionState {
 }
 
 export type ReferenceCheck =
-  | { outcome: 'resolved'; reference: WagerTransaction }
-  | { outcome: 'missing' }
-  | { outcome: 'invalid'; failureCode: FailureCode };
+  | { outcome: "resolved"; reference: WagerTransaction }
+  | { outcome: "missing" }
+  | { outcome: "invalid"; failureCode: FailureCode };
 
-// Hash do inbox: conteúdo de negócio mais a Idempotency-Key, para detectar messageId reutilizado com outra operação
-export function computeInboxPayloadHash(payload: WagerPayload & { idempotencyKey: string }): string {
-  return hashPayload({ idempotencyKey: payload.idempotencyKey, wagerPayloadHash: computeWagerPayloadHash(payload) });
+export function computeInboxPayloadHash(
+  payload: WagerPayload & { idempotencyKey: string },
+): string {
+  return hashPayload({
+    idempotencyKey: payload.idempotencyKey,
+    wagerPayloadHash: computeWagerPayloadHash(payload),
+  });
 }
 
-// Hash canônico do payload de negócio (algoritmo documentado no ARCHITECTURE.md)
 export function computeWagerPayloadHash(payload: WagerPayload): string {
   return hashPayload({
     providerId: payload.providerId,
@@ -112,7 +122,10 @@ export function computeWagerPayloadHash(payload: WagerPayload): string {
     roundId: payload.roundId,
     gameId: payload.gameId,
     kind: payload.kind,
-    money: { amount: payload.money.toString(), currency: payload.money.currency },
+    money: {
+      amount: payload.money.toString(),
+      currency: payload.money.currency,
+    },
     referenceExternalTransactionId: payload.referenceExternalTransactionId,
   });
 }
@@ -148,19 +161,35 @@ export class WagerTransaction {
   ) {}
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
-    if (!SUBMITTABLE_KINDS.includes(props.kind)) throw new InvalidArgumentError(`Kind ${String(props.kind)} cannot be submitted`);
-    if (props.providerId === INTERNAL_PROVIDER_ID) throw new InvalidArgumentError('Provider id is reserved');
-    const requiresReference = props.kind === WagerTransactionKind.Refund || props.kind === WagerTransactionKind.Rollback;
+    if (!SUBMITTABLE_KINDS.includes(props.kind))
+      throw new InvalidArgumentError(
+        `Kind ${String(props.kind)} cannot be submitted`,
+      );
+
+    if (props.providerId === INTERNAL_PROVIDER_ID)
+      throw new InvalidArgumentError("Provider id is reserved");
+
+    const requiresReference =
+      props.kind === WagerTransactionKind.Refund ||
+      props.kind === WagerTransactionKind.Rollback;
+
     if (requiresReference && !props.referenceExternalTransactionId) {
-      throw new InvalidArgumentError(`${props.kind} requires referenceExternalTransactionId`);
+      throw new InvalidArgumentError(
+        `${props.kind} requires referenceExternalTransactionId`,
+      );
     }
+
     if (props.referenceExternalTransactionId === props.externalTransactionId) {
-      throw new InvalidArgumentError('A transaction cannot reference itself');
+      throw new InvalidArgumentError("A transaction cannot reference itself");
     }
+
     // LOSS só registra resultado e aceita zero; os demais movimentam saldo e exigem valor positivo
     if (props.kind !== WagerTransactionKind.Loss && !props.money.isPositive()) {
-      throw new InvalidArgumentError(`${props.kind} amount must be greater than zero`);
+      throw new InvalidArgumentError(
+        `${props.kind} amount must be greater than zero`,
+      );
     }
+
     return new WagerTransaction(
       props.id,
       props.providerId,
@@ -179,9 +208,20 @@ export class WagerTransaction {
     );
   }
 
-  static createOpening(props: { id: string; walletId: string; playerId: string; money: Money; createdAt: Date }): WagerTransaction {
-    if (!props.money.isPositive()) throw new InvalidArgumentError('Opening amount must be greater than zero');
+  static createOpening(props: {
+    id: string;
+    walletId: string;
+    playerId: string;
+    money: Money;
+    createdAt: Date;
+  }): WagerTransaction {
+    if (!props.money.isPositive())
+      throw new InvalidArgumentError(
+        "Opening amount must be greater than zero",
+      );
+
     const externalTransactionId = `opening:${props.walletId}`;
+
     return new WagerTransaction(
       props.id,
       INTERNAL_PROVIDER_ID,
@@ -191,7 +231,10 @@ export class WagerTransaction {
         walletId: props.walletId,
         playerId: props.playerId,
         kind: WagerTransactionKind.Opening,
-        money: { amount: props.money.toString(), currency: props.money.currency },
+        money: {
+          amount: props.money.toString(),
+          currency: props.money.currency,
+        },
       }),
       props.walletId,
       props.playerId,
@@ -233,28 +276,37 @@ export class WagerTransaction {
   get status(): WagerTransactionStatus {
     return this._status;
   }
+
   get referenceTransactionId(): string | undefined {
     return this._referenceTransactionId;
   }
+
   get failureCode(): FailureCode | undefined {
     return this._failureCode;
   }
+
   get processedAt(): Date | undefined {
     return this._processedAt;
   }
+
   get resultBalance(): Money | undefined {
     return this._resultBalance;
   }
+
   get referenceAttempts(): number {
     return this._referenceAttempts;
   }
+
   get nextAttemptAt(): Date | undefined {
     return this._nextAttemptAt;
   }
 
-
-  markProcessed(referenceTransactionId: string | undefined, at: Date, resultBalance: Money): void {
-    this.assertNotTerminal('markProcessed');
+  markProcessed(
+    referenceTransactionId: string | undefined,
+    at: Date,
+    resultBalance: Money,
+  ): void {
+    this.assertNotTerminal("markProcessed");
     this._status = WagerTransactionStatus.Processed;
     this._referenceTransactionId = referenceTransactionId;
     this._processedAt = at;
@@ -264,7 +316,7 @@ export class WagerTransaction {
 
   // Cada chamada conta uma tentativa de resolver a referência
   markPendingReference(nextAttemptAt: Date, observedBalance: Money): void {
-    this.assertNotTerminal('markPendingReference');
+    this.assertNotTerminal("markPendingReference");
     this._status = WagerTransactionStatus.PendingReference;
     this._referenceAttempts += 1;
     this._nextAttemptAt = nextAttemptAt;
@@ -272,7 +324,7 @@ export class WagerTransaction {
   }
 
   reject(code: FailureCode, at: Date, observedBalance?: Money): void {
-    this.assertNotTerminal('reject');
+    this.assertNotTerminal("reject");
     this._status = WagerTransactionStatus.Rejected;
     this._failureCode = code;
     this._processedAt = at;
@@ -281,13 +333,12 @@ export class WagerTransaction {
   }
 
   fail(code: FailureCode, at: Date): void {
-    this.assertNotTerminal('fail');
+    this.assertNotTerminal("fail");
     this._status = WagerTransactionStatus.Failed;
     this._failureCode = code;
     this._processedAt = at;
     this._nextAttemptAt = undefined;
   }
-
 
   isTerminal(): boolean {
     return TERMINAL_STATUSES.has(this._status);
@@ -302,7 +353,10 @@ export class WagerTransaction {
   }
 
   isReversal(): boolean {
-    return this.kind === WagerTransactionKind.Refund || this.kind === WagerTransactionKind.Rollback;
+    return (
+      this.kind === WagerTransactionKind.Refund ||
+      this.kind === WagerTransactionKind.Rollback
+    );
   }
 
   matchesPayload(payloadHash: string): boolean {
@@ -317,42 +371,69 @@ export class WagerTransaction {
       case WagerTransactionKind.Win:
       case WagerTransactionKind.Refund:
         return LedgerDirection.Credit;
+
       case WagerTransactionKind.Rollback:
-        if (!reference) throw new InvalidArgumentError('ROLLBACK direction depends on its reference');
+        if (!reference)
+          throw new InvalidArgumentError(
+            "ROLLBACK direction depends on its reference",
+          );
+
         return invertDirection(reference.ledgerDirectionFor());
+
       case WagerTransactionKind.Loss:
-        throw new InvalidArgumentError('LOSS does not move balance');
+        throw new InvalidArgumentError("LOSS does not move balance");
     }
   }
 
-  checkReference(reference: WagerTransaction | null | undefined): ReferenceCheck {
+  checkReference(
+    reference: WagerTransaction | null | undefined,
+  ): ReferenceCheck {
     // Referência ainda não aplicada equivale a ausente: será resolvida depois
-    if (!reference || reference.status === WagerTransactionStatus.Pending || reference.status === WagerTransactionStatus.PendingReference) {
-      return { outcome: 'missing' };
+    if (
+      !reference ||
+      reference.status === WagerTransactionStatus.Pending ||
+      reference.status === WagerTransactionStatus.PendingReference
+    ) {
+      return { outcome: "missing" };
     }
+
     if (reference.status !== WagerTransactionStatus.Processed) {
-      return { outcome: 'invalid', failureCode: FailureCode.ReferenceNotProcessed };
+      return {
+        outcome: "invalid",
+        failureCode: FailureCode.ReferenceNotProcessed,
+      };
     }
+
     if (!ALLOWED_REFERENCE_KINDS[this.kind].includes(reference.kind)) {
-      return { outcome: 'invalid', failureCode: FailureCode.ReferenceInvalidKind };
+      return {
+        outcome: "invalid",
+        failureCode: FailureCode.ReferenceInvalidKind,
+      };
     }
+
     const sameContext =
       reference.providerId === this.providerId &&
       reference.playerId === this.playerId &&
       reference.walletId === this.walletId &&
       reference.roundId === this.roundId &&
       reference.money.currency === this.money.currency;
-    if (!sameContext) return { outcome: 'invalid', failureCode: FailureCode.ReferenceMismatch };
+
+    if (!sameContext)
+      return { outcome: "invalid", failureCode: FailureCode.ReferenceMismatch };
+
     // Reversão parcial está fora de escopo: valor deve ser igual ao da referência
     if (this.isReversal() && !reference.money.equals(this.money)) {
-      return { outcome: 'invalid', failureCode: FailureCode.AmountMismatch };
+      return { outcome: "invalid", failureCode: FailureCode.AmountMismatch };
     }
-    return { outcome: 'resolved', reference };
+
+    return { outcome: "resolved", reference };
   }
 
   private assertNotTerminal(transition: string): void {
     if (this.isTerminal()) {
-      throw new InvalidTransactionStateError(`Cannot ${transition}: transaction ${this.id} is already ${this._status}`);
+      throw new InvalidTransactionStateError(
+        `Cannot ${transition}: transaction ${this.id} is already ${this._status}`,
+      );
     }
   }
 }
