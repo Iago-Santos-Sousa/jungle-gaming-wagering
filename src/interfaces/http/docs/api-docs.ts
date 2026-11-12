@@ -82,6 +82,7 @@ export const ApiSubmitWagerTransaction = () =>
       content: { 'application/json': { examples: WagerExamples.rejected } },
     }),
     unavailable(),
+    errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, 'Falha permanente; reenviar a mesma requisição não resolve', WagerExamples.permanentFailure),
   );
 
 export const ApiGetWagerTransaction = () =>

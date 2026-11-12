@@ -12,15 +12,15 @@ import { ConcurrencyConflictError, IdempotencyConflictError } from '../../applic
 import { WageringMetrics } from '../../application/ports/system';
 import { SubmitWagerTransactionUseCase } from '../../application/use-cases/wager-use-cases';
 import { Money } from '../../domain/money/money';
-import { InvalidArgumentError } from '../../domain/shared/domain-error';
+import { InvalidArgumentError, InvalidTransactionStateError } from '../../domain/shared/domain-error';
 import { RetryPolicy } from '../../domain/shared/retry-policy';
 import { computeInboxPayloadHash } from '../../domain/wager-transaction/wager-transaction';
 import { APP_CONFIG, type AppConfig } from '../../infrastructure/config/app-config';
-import { isTransientDatabaseError } from '../../infrastructure/database/database-errors';
+import { isPermanentDatabaseError, isTransientDatabaseError } from '../../infrastructure/database/database-errors';
 import { SQS_CLIENT, SqsQueueResolver } from '../../infrastructure/messaging/sqs.module';
 import { parseWagerMessage, type WagerTransactionMessageDto } from './wager-message.dto';
 
-type DeadLetterReason = 'invalid_message' | 'retries_exhausted';
+type DeadLetterReason = 'invalid_message' | 'permanent_error' | 'retries_exhausted';
 
 // Consumidor de wager-transactions.fifo. Reaproveita o mesmo use case da entrada HTTP.
 // Negócio: ack. Transitório: devolve com backoff. Permanente ou tentativas esgotadas: DLQ.
@@ -163,6 +163,11 @@ export class SqsWagerConsumer implements OnApplicationBootstrap, BeforeApplicati
     // Contrato violado detectado pelo domínio: permanente
     if (error instanceof InvalidArgumentError) {
       await this.deadLetter(message, 'invalid_message', error);
+      return;
+    }
+    // Dado inválido para o banco, violação de integridade ou transição ilegal: reenviar nunca resolve
+    if (isPermanentDatabaseError(error) || error instanceof InvalidTransactionStateError) {
+      await this.deadLetter(message, 'permanent_error', error);
       return;
     }
     if (receiveCount >= this.config.sqs.maxReceives) {

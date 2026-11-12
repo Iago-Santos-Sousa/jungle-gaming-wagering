@@ -21,6 +21,9 @@ export const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const MoneyDecimal = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_EVEN, toExpNeg: -40, toExpPos: 40 });
 type MoneyDecimal = InstanceType<typeof MoneyDecimal>;
 
+// Menor valor absoluto que não cabe mais em numeric(20,2)
+const STORAGE_LIMIT = new MoneyDecimal(10).pow(MAX_INTEGER_DIGITS);
+
 // Value object monetário imutável com escala fixa de 2 casas
 export class Money {
   private constructor(
@@ -83,6 +86,11 @@ export class Money {
   isLessThan(other: Money): boolean {
     this.assertSameCurrency(other);
     return this.value.lessThan(other.value);
+  }
+
+  // Resultado de uma operação que passou dos 18 dígitos inteiros aceitos pelo banco
+  exceedsStorageLimit(): boolean {
+    return this.value.abs().greaterThanOrEqualTo(STORAGE_LIMIT);
   }
 
   equals(other: Money): boolean {

@@ -35,6 +35,15 @@ export function isTransientDatabaseError(error: unknown): boolean {
   return error instanceof Error && TRANSIENT_MESSAGE.test(error.message);
 }
 
+// Classes de SQLSTATE em que reenviar a mesma operação nunca dá certo: 22 (data exception, ex.: numeric overflow)
+// e 23 (violação de integridade). As unique de idempotência já chegam convertidas em erro de aplicação.
+const PERMANENT_SQLSTATE_CLASSES = new Set(['22', '23']);
+
+export function isPermanentDatabaseError(error: unknown): boolean {
+  const state = sqlState(error);
+  return state !== undefined && state.length === 5 && PERMANENT_SQLSTATE_CLASSES.has(state.slice(0, 2));
+}
+
 export function isLockConflict(error: unknown): boolean {
   const state = sqlState(error);
   return state !== undefined && LOCK_CONFLICT_SQLSTATES.has(state);

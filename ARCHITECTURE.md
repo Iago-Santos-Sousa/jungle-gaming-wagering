@@ -125,6 +125,7 @@ Interpretações adotadas:
 | `REFERENCE_NOT_PROCESSED` | Referência rejeitada ou falha | Desiste |
 | `REFERENCE_ALREADY_REVERSED` | Referência já revertida | Desiste |
 | `AMOUNT_MISMATCH` | Valor da reversão diferente da referência | Corrige o valor |
+| `BALANCE_LIMIT_EXCEEDED` | Crédito levaria o saldo além de `numeric(20,2)` (18 dígitos inteiros) | Desiste |
 | `INTERNAL_ERROR` | Erro permanente de infraestrutura (`FAILED`) | Contata o operador |
 
 ### Códigos HTTP
@@ -139,6 +140,7 @@ Consistentes em todos os endpoints. O corpo de erro é sempre `{ code, message, 
 | 422 | Rejeição de negócio (corpo com `status: REJECTED` e `failureCode`) |
 | 202 | Aceita com processamento pendente (`PENDING_REFERENCE`) |
 | 503 `SERVICE_UNAVAILABLE` | Falha transitória (lock, corrida de inserção na mesma key, banco fora, timeout), com `Retry-After` |
+| 500 `PERMANENT_FAILURE` | Falha permanente conhecida (SQLSTATE das classes 22 e 23, transição ilegal de estado): reenviar igual não resolve |
 | 500 `INTERNAL_ERROR` | Falha inesperada |
 
 ## 7. Referências fora de ordem
@@ -160,6 +162,7 @@ Filas: `wager-transactions.fifo` (entrada), `wager-transactions-dlq.fifo` e `wag
 - Classificação de falhas:
   - **negócio** (REJECTED, `WALLET_NOT_FOUND`, conflito de idempotência): terminal, ack;
   - **permanente** (JSON inválido, contrato violado, `kind = OPENING`): DLQ imediata com atributo `reason=invalid_message`;
+  - **permanente de processamento** (SQLSTATE das classes 22 e 23, como overflow numérico ou violação de constraint, e transição ilegal de estado): DLQ imediata com `reason=permanent_error`, sem gastar as tentativas de retry;
   - **transitória** (lock, banco, timeout) e falhas não classificadas: `ChangeMessageVisibility` com backoff exponencial (2s a 300s) e nova entrega.
 - **Limite de tentativas**: ao atingir `SQS_MAX_RECEIVES` (5) entregas, a própria aplicação envia para a DLQ (`reason=retries_exhausted`) e faz ack. O `RedrivePolicy` da fila fica em `SQS_MAX_RECEIVES + 1` como rede de segurança. Assim o limite não depende do emulador. O envio para a DLQ usa o `MessageId` original como deduplicação, para um crash entre envio e ack não duplicar a mensagem na DLQ.
 - **SIGTERM** (`enableShutdownHooks`, `init: true` e `stop_grace_period: 30s` no compose): o consumer aborta o long polling, conclui as mensagens em andamento até `SHUTDOWN_TIMEOUT_MS` e devolve a visibilidade (`VisibilityTimeout = 0`) das que foram recebidas e ainda não começaram. O ORM só fecha depois, porque os workers param em `beforeApplicationShutdown`.

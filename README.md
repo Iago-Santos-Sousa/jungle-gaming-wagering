@@ -133,6 +133,7 @@ Códigos HTTP do `POST /wagering/transactions`:
 | `409` | Mesma key (ou mesmo `externalTransactionId`) com payload diferente | Não |
 | `422` | Rejeitada por regra de negócio (`failureCode`) | Não muda o resultado |
 | `503` | Falha transitória (header `Retry-After`) | Sim, com a mesma key |
+| `500` | `PERMANENT_FAILURE` (falha permanente conhecida) ou `INTERNAL_ERROR` (inesperada) | Não sem correção |
 
 ## Enviando mensagens pela fila
 

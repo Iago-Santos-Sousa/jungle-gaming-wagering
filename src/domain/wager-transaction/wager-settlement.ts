@@ -1,5 +1,5 @@
 import { WalletLedgerEntry } from '../ledger/wallet-ledger-entry';
-import { InsufficientFundsError } from '../shared/domain-error';
+import { BalanceLimitExceededError, InsufficientFundsError } from '../shared/domain-error';
 import type { RetryPolicy } from '../shared/retry-policy';
 import type { Wallet } from '../wallet/wallet';
 import { FailureCode } from './failure-code';
@@ -73,6 +73,10 @@ export function settleWagerTransaction(input: SettlementInput): SettlementResult
       }),
     };
   } catch (error) {
+    if (error instanceof BalanceLimitExceededError) {
+      transaction.reject(FailureCode.BalanceLimitExceeded, now, wallet.balance);
+      return {};
+    }
     if (!(error instanceof InsufficientFundsError)) throw error;
     // Reversão sem saldo é operacionalmente diferente de aposta sem saldo
     const code = transaction.isReversal() ? FailureCode.ReversalInsufficientFunds : FailureCode.InsufficientFunds;
