@@ -13,7 +13,7 @@ import { SQS_CLIENT, createSqsClient } from '../../src/infrastructure/messaging/
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
 import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, submitWager, wagerBody, type ApiClient } from '../support/api-client';
-import { drain, drainUntil, eventually, isolatedQueues, queueUrl, sendRaw, wagerEnvelope } from '../support/sqs-helpers';
+import { bySendOrder, drain, drainUntil, eventually, isolatedQueues, queueUrl, sendRaw, wagerEnvelope } from '../support/sqs-helpers';
 import { startTestApp, type TestApp } from '../support/test-app';
 
 const queues = isolatedQueues('messaging');
@@ -372,13 +372,15 @@ describe('transactional outbox', () => {
       const [a, b] = await Promise.all([claimWith(ctx.app.get(UnitOfWork)), claimWith(other.app.get(UnitOfWork))]);
       const aggregatesOf = (claimed: OutboxMessage[]) => new Set(claimed.map((message) => message.aggregateId));
       expect([...aggregatesOf(a)].filter((id) => aggregatesOf(b).has(id))).toEqual([]);
-      await Bun.sleep(600);
+      // Os dois publishers "morrem": os leases expiram sem depender do relógio
+      await expireLeases([...a, ...b].map((message) => message.id));
 
       await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
       const parse = (m: { Body?: string }) => JSON.parse(m.Body ?? '{}') as { eventType: string; data: { walletId?: string; walletVersion?: number } };
       const balanceEvents = (all: { Body?: string }[], walletId: string) =>
         all.map(parse).filter((event) => event.eventType === 'WalletBalanceChanged' && event.data.walletId === walletId);
-      const events = (await drainUntil(sqs, eventsUrl, (all) => wallets.every((wallet) => balanceEvents(all, wallet.walletId).length >= 5))).map(parse);
+      // Ordem de envio registrada pelo broker: é o que o publisher garante; a entrega do emulador pode reordenar com o relógio
+      const events = bySendOrder(await drainUntil(sqs, eventsUrl, (all) => wallets.every((wallet) => balanceEvents(all, wallet.walletId).length >= 5))).map(parse);
       for (const wallet of wallets) {
         const versions = events
           .filter((event) => event.eventType === 'WalletBalanceChanged' && event.data.walletId === wallet.walletId)
@@ -390,12 +392,24 @@ describe('transactional outbox', () => {
     }
   });
 
+  // Bem no passado: imune a saltos do relógio da VM do Docker, que podem deixar "agora" segundos atrás do que foi gravado
+  const longAgo = () => new Date(Date.now() - 3_600_000);
+
+  // Vence (next_attempt_at) ou expira (locked_until) linhas sem esperar o relógio
+  async function makeDue(ids: readonly string[]): Promise<void> {
+    await em.fork().execute(`update outbox_messages set next_attempt_at = ? where id = any(?::uuid[])`, [longAgo(), `{${ids.join(',')}}`]);
+  }
+  async function expireLeases(ids: readonly string[]): Promise<void> {
+    await em.fork().execute(`update outbox_messages set locked_until = ? where id = any(?::uuid[])`, [longAgo(), `{${ids.join(',')}}`]);
+  }
+
   // Deixa pendentes só os eventos de saldo da wallet (os demais agregados do cenário são marcados como publicados)
   async function walletWithOnlyBalanceEventsPending(bets: number): Promise<{ walletId: string; pendingIds: string[] }> {
     await publishAll([ctx.app.get(OutboxPublisherWorker)]);
     const wallet = await createWallet(api, '100.00');
     for (let i = 0; i < bets; i++) await submitWager(api, wagerBody({ ...wallet, amount: '1.00' }));
     await em.fork().execute(`update outbox_messages set published_at = ? where published_at is null and aggregate_id <> ?`, [new Date(), wallet.walletId]);
+    await em.fork().execute(`update outbox_messages set next_attempt_at = ? where published_at is null and aggregate_id = ?`, [longAgo(), wallet.walletId]);
     const rows = await em.fork().execute<{ id: string }[]>(
       `select id from outbox_messages where published_at is null and aggregate_id = ? order by sequence`,
       [wallet.walletId],
@@ -425,8 +439,9 @@ describe('transactional outbox', () => {
   test('publisher atrasado não libera nem reagenda linhas cujo lease outro publisher assumiu', async () => {
     const { pendingIds } = await walletWithOnlyBalanceEventsPending(1);
     const uow = ctx.app.get(UnitOfWork);
-    const stale = await claimOutbox(uow, 50, 200);
-    await Bun.sleep(300);
+    const stale = await claimOutbox(uow, 50, 30_000);
+    // O lease do publisher antigo expira (sem depender do relógio) e outro publisher assume
+    await expireLeases(pendingIds);
     const current = await claimOutbox(uow, 50, 30_000);
     expect(current.messages.map((message) => message.id)).toEqual(pendingIds);
 
@@ -478,10 +493,11 @@ describe('transactional outbox', () => {
     expect(rows[0]).toMatchObject({ id: headId, attempts: 1, last_error: 'simulated', published_at: null, locked_until: null });
     for (const follower of rows.slice(1)) expect(follower).toMatchObject({ attempts: 0, last_error: null, published_at: null, locked_until: null });
 
+    await makeDue([headId!]);
     await publishAll([ctx.app.get(OutboxPublisherWorker)]);
     const idsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => pendingIds.includes(id));
     const published = await drainUntil(sqs, eventsUrl, (all) => idsIn(all).length >= pendingIds.length);
-    expect(idsIn(published)).toEqual(pendingIds);
+    expect(idsIn(bySendOrder(published))).toEqual(pendingIds);
   });
 
   test('runOnce sinaliza mais trabalho só quando o claim vem cheio', async () => {
