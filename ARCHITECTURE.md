@@ -189,7 +189,7 @@ O `OutboxPublisherWorker` roda em todas as instâncias:
 
    Cada agregado fica com um único publisher por vez, então dois publishers nunca publicam eventos da mesma wallet em paralelo e fora de ordem. O `FOR UPDATE` reavalia o lease na versão mais recente da linha: um agregado que outro publisher acabou de reservar fica de fora. A transação termina antes da publicação, sem conexão presa esperando o broker.
 
-2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos (`MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`), em rodadas: cada rodada envia o próximo evento de cada agregado, em lotes de até 10 enviados em paralelo, e **nenhum lote tem dois eventos do mesmo agregado**; as rodadas seguem em sequência. Assim uma falha parcial por entrada nunca deixa um evento posterior passar na frente de um anterior. Trade-off: uma wallet com muitos eventos pendentes publica um por chamada; o teto do claim mantém o pior caso dentro do lease. Depois da primeira falha de um agregado, os eventos seguintes dele não são enviados e voltam como `skipped`.
+2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos (`MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`), em rodadas: cada rodada envia o próximo evento de cada agregado, em lotes de até 10 enviados em paralelo, e **nenhum lote tem dois eventos do mesmo agregado**; as rodadas seguem em sequência. Assim uma falha parcial por entrada nunca deixa um evento posterior passar na frente de um anterior. Trade-off: uma wallet com muitos eventos pendentes publica um por chamada. Para o ciclo não passar do lease com o broker lento, o publisher não abre rodada depois da metade do lease, e o que não saiu volta como `skipped`. Depois da primeira falha de um agregado, os eventos seguintes dele não são enviados e voltam como `skipped`.
 3. **Confirmação** numa transação: publicadas com um único `UPDATE ... WHERE id = ANY(...)` (mais a promoção de cabeça), falhas com um único `UPDATE ... FROM (VALUES ...)` e `skipped` com um único `UPDATE`. Só falhas reais recebem backoff (1s a 60s), `last_error` e `retries_total`, sem limite de tentativas: evento confirmado nunca é descartado. As `skipped` só devolvem o lease, sem tentativa nem backoff; a cabeça com backoff segura o agregado inteiro e preserva a ordem. Um ciclo com falha não conta como progresso: o worker espera `OUTBOX_POLL_INTERVAL_MS` em vez de girar sem pausa sobre um acúmulo que não sai.
 
 Se o processo morre depois do commit e antes de publicar, ou depois do claim, o lease vence e outra instância publica. A entrega é **at-least-once**: uma publicação duplicada carrega o mesmo `eventId` (id da linha da outbox), e o consumidor deduplica por ele. A deduplicação FIFO do SQS ainda suprime cópias dentro da janela de 5 minutos.
@@ -245,6 +245,8 @@ Unidade para o domínio puro e integração com PostgreSQL e MiniStack reais par
 | Migrations e constraints                                | `test/integration/schema.test.ts`                                                |
 | Retry e DLQ                                             | `test/integration/messaging.test.ts`                                             |
 
+O teste de carga (`bun run test:load`) está em [LOAD-TEST.md](LOAD-TEST.md), com ambiente, metodologia, resultados e análise.
+
 O "crash depois do commit" é simulado de forma determinística: o teste recebe a mensagem, executa o use case com o contexto de inbox (commit) e não faz ack. Matar um processo no instante exato entre commit e ack seria não determinístico. O reinício usa o shutdown real da aplicação (os mesmos hooks do SIGTERM) com outra instância assumindo a fila.
 
 ## 14. Trade-offs e limitações
@@ -257,5 +259,6 @@ O "crash depois do commit" é simulado de forma determinística: o teste recebe 
 - **Métricas por instância**: cada processo expõe as suas; a agregação seria feita pelo Prometheus. `outbox_lag_seconds` e `dlq_depth` são globais porque vêm do banco e da fila.
 - **Consumidor de eventos** fora do escopo: os eventos ficam em `wagering-events.fifo`, prontos para consumo com deduplicação por `eventId`.
 - **Inbox e outbox crescem** sem limpeza. Em produção, um job removeria registros publicados ou processados mais antigos que a janela de redelivery.
-- **Sem teste de carga** e **sem ledger de partidas dobradas**, ambos diferenciais opcionais.
+- **Vazão da outbox abaixo da vazão de escrita**: no teste de carga ([LOAD-TEST.md](LOAD-TEST.md)), de 400 a 500 transações/s geraram de 700 a 900 eventos/s, e os publishers drenaram de 90 a 205 eventos/s contra o MiniStack. O lag cresce durante picos e cai depois; nenhum evento se perde. A wallet quente é o acúmulo mais lento, porque publica um evento por chamada.
+- **Sem ledger de partidas dobradas**, diferencial opcional.
 - **Uma moeda em uso** (BRL), com o modelo multi-moeda e conflitos de moeda testados.

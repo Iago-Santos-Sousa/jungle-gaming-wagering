@@ -96,6 +96,12 @@ bun run test:unit       # só unidade
 bun run typecheck
 ```
 
+Teste de carga contra o stack do compose no ar (API e réplicas de worker com portas no host). Ambiente, metodologia, resultados e análise estão em [LOAD-TEST.md](LOAD-TEST.md):
+
+```bash
+bun run test:load
+```
+
 ## Exemplos com curl
 
 ```bash
@@ -160,6 +166,7 @@ Todas têm default; a lista completa e comentada está em [.env.example](.env.ex
 | --- | --- | --- |
 | `WORKERS_ENABLED` | `true` | Liga consumer SQS, publisher da outbox e worker de referências pendentes |
 | `WORKER_REPLICAS` | `2` | Réplicas extras do serviço `wagering-worker` |
+| `WORKER_HOST_PORTS` | `3001-3002` | Portas no host das réplicas (uma por réplica), usadas pelo teste de carga |
 | `DB_POOL_MAX` | `10` | Conexões por instância (total no banco = pool × instâncias) |
 | `DB_LOCK_TIMEOUT_MS` | `5000` | Espera máxima pelo lock de uma wallet antes de virar erro transitório |
 | `SQS_MAX_RECEIVES` | `5` | Entregas antes de a mensagem ir para a DLQ |
@@ -177,5 +184,5 @@ src/
   interfaces/http/   controllers, DTOs, filtro de erros, Swagger (exemplos em docs/)
   interfaces/workers/ consumer SQS, publisher da outbox, reprocessador de referências
   scripts/           criação de filas e envio de mensagens de teste
-test/                unit, integration, concurrency e support
+test/                unit, integration, concurrency, load e support
 ```
