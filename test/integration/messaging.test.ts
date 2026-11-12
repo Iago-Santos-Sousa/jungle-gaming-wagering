@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { ReceiveMessageCommand, SendMessageBatchCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventPublisher } from '../../src/application/ports/event-publisher';
 import { UnitOfWork } from '../../src/application/ports/repositories';
@@ -8,7 +8,7 @@ import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
 import { RetryPolicy } from '../../src/domain/shared/retry-policy';
 import { computeInboxPayloadHash, computeWagerPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
-import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
+import { SQS_CLIENT, createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
 import { OutboxPublisherWorker, PendingReferenceWorker } from '../../src/interfaces/workers/scheduled-workers';
 import { SqsWagerConsumer } from '../../src/interfaces/workers/sqs-wager-consumer';
 import { apiClient, createWallet, expectLedgerConsistent, newId, readWalletState, submitWager, wagerBody, type ApiClient } from '../support/api-client';
@@ -449,6 +449,38 @@ describe('transactional outbox', () => {
     expect(new Date(rows[1]!.locked_until!).getTime()).toBe(current.leaseUntil.getTime());
     expect((await claimOutbox(uow, 50, 30_000)).messages).toEqual([]);
     await uow.read((scope) => scope.outbox.releaseLease(current.messages, current.leaseUntil));
+  });
+
+  test('falha na cabeça: só ela ganha tentativa e backoff; as seguintes ficam intactas e saem depois, em ordem', async () => {
+    const { pendingIds } = await walletWithOnlyBalanceEventsPending(2);
+    const headId = pendingIds[0];
+    const client = ctx.app.get<SQSClient>(SQS_CLIENT);
+    const original = client.send.bind(client);
+    // O broker recusa só a entrada da cabeça
+    const spy = spyOn(client, 'send').mockImplementation((async (command: unknown, ...rest: unknown[]) => {
+      if (!(command instanceof SendMessageBatchCommand)) return (original as (...args: unknown[]) => Promise<unknown>)(command, ...rest);
+      const entries = command.input.Entries ?? [];
+      const head = entries.find((entry) => entry.MessageDeduplicationId === headId);
+      if (!head) return (original as (...args: unknown[]) => Promise<unknown>)(command, ...rest);
+      return { Successful: [], Failed: [{ Id: head.Id, Code: 'InternalError', Message: 'simulated', SenderFault: false }] };
+    }) as typeof client.send);
+    try {
+      await ctx.app.get(OutboxPublisherWorker).runOnce();
+    } finally {
+      spy.mockRestore();
+    }
+
+    const rows = await em.fork().execute<{ id: string; attempts: number; last_error: string | null; published_at: Date | null; locked_until: Date | null }[]>(
+      `select id, attempts, last_error, published_at, locked_until from outbox_messages where id = any(?::uuid[]) order by sequence`,
+      [`{${pendingIds.join(',')}}`],
+    );
+    expect(rows[0]).toMatchObject({ id: headId, attempts: 1, last_error: 'simulated', published_at: null, locked_until: null });
+    for (const follower of rows.slice(1)) expect(follower).toMatchObject({ attempts: 0, last_error: null, published_at: null, locked_until: null });
+
+    await publishAll([ctx.app.get(OutboxPublisherWorker)]);
+    const idsIn = (all: { Body?: string }[]) => all.map((m) => (JSON.parse(m.Body ?? '{}') as { eventId: string }).eventId).filter((id) => pendingIds.includes(id));
+    const published = await drainUntil(sqs, eventsUrl, (all) => idsIn(all).length >= pendingIds.length);
+    expect(idsIn(published)).toEqual(pendingIds);
   });
 
   test('runOnce sinaliza mais trabalho só quando o claim vem cheio', async () => {

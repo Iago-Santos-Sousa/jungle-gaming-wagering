@@ -43,21 +43,27 @@ export class PublishOutboxUseCase {
     if (claimed.length === 0) return { claimed: 0, published: 0 };
 
     // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed } = await this.publisher.publish(claimed);
+    const { published, failed, skipped } = await this.publisher.publish(claimed);
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
     await this.uow.read(async (scope) => {
       await scope.outbox.markPublished(published, leaseUntil);
+      // Só falha real ganha tentativa, backoff e last_error; a cabeça com backoff continua segurando o agregado
       for (const { message, error } of failed) {
         message.scheduleRetry(now, this.retryPolicy);
         await scope.outbox.scheduleRetry(message, error, leaseUntil);
       }
+      // Bloqueadas nunca foram enviadas: só devolvem o lease
+      await scope.outbox.releaseLease(skipped, leaseUntil);
     });
 
     if (failed.length > 0) {
       for (let i = 0; i < failed.length; i++) this.metrics.retry('outbox');
-      this.logger.warn({ failed: failed.length, published: published.length, error: failed[0]?.error }, 'outbox publish partially failed');
+      this.logger.warn(
+        { failed: failed.length, skipped: skipped.length, published: published.length, error: failed[0]?.error },
+        'outbox publish partially failed',
+      );
     }
     return { claimed: claimed.length, published: published.length };
   }
