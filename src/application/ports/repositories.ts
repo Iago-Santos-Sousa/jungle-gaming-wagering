@@ -65,8 +65,9 @@ export interface InboxRepository {
 
 export interface OutboxRepository {
   add(messages: readonly OutboxMessage[]): Promise<void>;
-  // Reserva mensagens vencidas com lease (FOR UPDATE SKIP LOCKED), sem segurar transação aberta.
-  // now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
+  // Reserva com lease todas as mensagens pendentes de agregados cuja mensagem mais antiga está vencida e livre.
+  // Um agregado fica com um único publisher por vez, o que preserva a ordem por agregado. Exige transação (FOR UPDATE).
+  // Devolve em ordem de publicação. now vem do Clock da aplicação: agendamento e lease usam a mesma fonte de tempo.
   claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]>;
   // Marca o lote publicado com um único UPDATE
   markPublished(messages: readonly OutboxMessage[]): Promise<void>;

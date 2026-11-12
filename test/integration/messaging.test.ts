@@ -4,6 +4,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventPublisher } from '../../src/application/ports/event-publisher';
 import { UnitOfWork } from '../../src/application/ports/repositories';
 import { ReprocessPendingReferenceUseCase, SubmitWagerTransactionUseCase } from '../../src/application/use-cases/wager-use-cases';
+import type { OutboxMessage } from '../../src/domain/messaging/outbox-message';
 import { Money } from '../../src/domain/money/money';
 import { computeInboxPayloadHash, type SubmittableKind } from '../../src/domain/wager-transaction/wager-transaction';
 import { createSqsClient } from '../../src/infrastructure/messaging/sqs.module';
@@ -326,10 +327,41 @@ describe('transactional outbox', () => {
     }
   });
 
+  test('publishers concorrentes reservam agregados inteiros e publicam os eventos de cada wallet em ordem', async () => {
+    const other = await startTestApp(overrides);
+    try {
+      const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(api, '100.00')));
+      // Várias movimentações por wallet: os eventos de saldo precisam sair em ordem de walletVersion
+      for (let i = 0; i < 4; i++) {
+        await Promise.all(wallets.map((wallet) => submitWager(api, wagerBody({ ...wallet, amount: '1.00' }))));
+      }
+
+      // Claims concorrentes: nenhum agregado fica dividido entre dois publishers
+      const claimWith = (uow: UnitOfWork) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), 2, 500));
+      const [a, b] = await Promise.all([claimWith(ctx.app.get(UnitOfWork)), claimWith(other.app.get(UnitOfWork))]);
+      const aggregatesOf = (claimed: OutboxMessage[]) => new Set(claimed.map((message) => message.aggregateId));
+      expect([...aggregatesOf(a)].filter((id) => aggregatesOf(b).has(id))).toEqual([]);
+      await Bun.sleep(600);
+
+      await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
+      const events = (await drain(sqs, eventsUrl)).map(
+        (m) => JSON.parse(m.Body ?? '{}') as { eventType: string; data: { walletId?: string; walletVersion?: number } },
+      );
+      for (const wallet of wallets) {
+        const versions = events
+          .filter((event) => event.eventType === 'WalletBalanceChanged' && event.data.walletId === wallet.walletId)
+          .map((event) => event.data.walletVersion);
+        expect(versions).toEqual([1, 2, 3, 4, 5]);
+      }
+    } finally {
+      await other.close();
+    }
+  });
+
   test('commit confirmado e processo morto antes de publicar: outra instância publica após o lease', async () => {
     const wallet = await createWallet(api, '100.00');
     // Instância A reserva o lote (lease) e morre antes de publicar
-    const claimed = await ctx.app.get(UnitOfWork).read((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
+    const claimed = await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, ctx.config.outbox.leaseMs));
     expect(claimed.some((message) => message.aggregateId === wallet.walletId)).toBe(true);
 
     const other = await startTestApp(overrides);
@@ -347,7 +379,7 @@ describe('transactional outbox', () => {
 
   test('publicação duplicada carrega o mesmo eventId e é deduplicável pelo consumidor', async () => {
     const wallet = await createWallet(api, '100.00');
-    const [message] = (await ctx.app.get(UnitOfWork).read((scope) => scope.outbox.claimDue(new Date(), 100, 1))).filter((m) => m.aggregateId === wallet.walletId);
+    const [message] = (await ctx.app.get(UnitOfWork).transactional((scope) => scope.outbox.claimDue(new Date(), 100, 1))).filter((m) => m.aggregateId === wallet.walletId);
     expect(message).toBeDefined();
     // Publica, "perde" a confirmação e publica de novo após o lease vencer
     await ctx.app.get(EventPublisher).publish([message!]);

@@ -276,22 +276,39 @@ class MikroOrmOutboxRepository implements OutboxRepository {
   }
 
   async claimDue(now: Date, limit: number, leaseMs: number): Promise<OutboxMessage[]> {
-    // SKIP LOCKED: publishers concorrentes pegam lotes disjuntos; lease vencido volta a ficar disponível
-    const rows = await this.em.execute<RawOutboxRow[]>(
-      `update outbox_messages o
-          set locked_until = ?
+    // 1) Trava a cabeça (mensagem pendente mais antiga) de até `limit` agregados vencidos e livres.
+    //    SKIP LOCKED faz publishers concorrentes pegarem agregados diferentes; o FOR UPDATE reavalia o lease
+    //    na versão mais recente da linha, então um agregado reservado por outro publisher que já confirmou fica de fora.
+    const heads = await this.em.execute<{ aggregate_id: string }[]>(
+      `select o.aggregate_id
+         from outbox_messages o
         where o.id in (
-          select id from outbox_messages
+          select distinct on (aggregate_id) id
+            from outbox_messages
            where published_at is null
-             and next_attempt_at <= ?
-             and (locked_until is null or locked_until < ?)
-           order by next_attempt_at
-           limit ?
-           for update skip locked)
-       returning o.*`,
-      [new Date(now.getTime() + leaseMs), now, now, limit],
+           order by aggregate_id, occurred_at, id)
+          and o.next_attempt_at <= ?
+          and (o.locked_until is null or o.locked_until < ?)
+        order by o.next_attempt_at
+        limit ?
+        for update skip locked`,
+      [now, now, limit],
     );
-    return rows.map((row) => toOutboxMessage(fromRawOutbox(row))).sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+    if (heads.length === 0) return [];
+
+    // 2) Reserva todas as pendentes desses agregados, para um único publisher publicá-las em ordem
+    const rows = await this.em.execute<RawOutboxRow[]>(
+      `update outbox_messages
+          set locked_until = ?
+        where published_at is null
+          and aggregate_id = any(?::uuid[])
+       returning *`,
+      [new Date(now.getTime() + leaseMs), `{${heads.map((head) => head.aggregate_id).join(',')}}`],
+    );
+    // Ordem de publicação: ocorrência e depois id (UUIDv7 desempata eventos do mesmo commit)
+    return rows
+      .map((row) => toOutboxMessage(fromRawOutbox(row)))
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
   async markPublished(messages: readonly OutboxMessage[]): Promise<void> {

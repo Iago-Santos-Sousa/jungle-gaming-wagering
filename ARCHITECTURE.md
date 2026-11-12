@@ -178,8 +178,12 @@ Transação, saldo, ledger, inbox (quando a entrada é SQS) e eventos são grava
 
 O `OutboxPublisherWorker` roda em todas as instâncias:
 
-1. **Claim com lease**: `UPDATE ... SET locked_until = now + lease WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED LIMIT n) RETURNING *`. Publishers concorrentes recebem lotes disjuntos, e o statement termina na hora, sem transação aberta durante a publicação.
-2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos: `MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`.
+1. **Claim por agregado com lease**, numa transação curta de dois statements:
+   - trava com `FOR UPDATE SKIP LOCKED` a **cabeça** (mensagem pendente mais antiga, por `occurred_at, id`, via `DISTINCT ON (aggregate_id)`) de até `n` agregados vencidos e sem lease válido;
+   - aplica o lease (`locked_until = now + lease`) a **todas** as pendentes desses agregados e devolve em ordem de `occurred_at, id` (o UUIDv7 desempata eventos do mesmo commit).
+
+   Cada agregado fica com um único publisher por vez, então dois publishers nunca publicam eventos da mesma wallet em paralelo e fora de ordem. O `FOR UPDATE` reavalia o lease na versão mais recente da linha: um agregado que outro publisher acabou de reservar fica de fora. A transação termina antes da publicação, sem conexão presa esperando o broker.
+2. **Publicação** com `SendMessageBatch` na fila FIFO de eventos (`MessageGroupId = aggregateId`, `MessageDeduplicationId = eventId`), na ordem do claim. Depois da primeira falha de um agregado, os eventos seguintes dele não são enviados e voltam para nova tentativa junto com o que falhou. A cabeça com backoff segura o agregado inteiro e preserva a ordem.
 3. **Confirmação** do lote com um único `UPDATE ... WHERE id = ANY(...)`. Falhas parciais recebem `scheduleRetry` com backoff (1s a 60s) e `last_error`, sem limite de tentativas: evento confirmado nunca é descartado.
 
 Se o processo morre depois do commit e antes de publicar, ou depois do claim, o lease vence e outra instância publica. A entrega é **at-least-once**: uma publicação duplicada carrega o mesmo `eventId` (id da linha da outbox), e o consumidor deduplica por ele. A deduplicação FIFO do SQS ainda suprime cópias dentro da janela de 5 minutos.
@@ -241,6 +245,7 @@ O "crash depois do commit" é simulado de forma determinística: o teste recebe 
 
 - **Throughput por wallet** limitado pelo lock pessimista. Uma wallet muito quente serializa suas operações; o paralelismo entre wallets não é afetado.
 - **Emulador**: o LocalStack passou a exigir conta e token em 2026, então o projeto usa o MiniStack, alternativa aceita pelo enunciado. O long polling dele tem granularidade de cerca de 5s; por isso os testes usam short polling. O limite de entregas e a DLQ ficam na aplicação para não depender da fidelidade do emulador.
+- **Ordem da outbox dentro de um mesmo `SendMessageBatch`**: se uma entrada falha e uma posterior do mesmo agregado no mesmo lote é aceita pelo broker, essa posterior já foi publicada. É raro (falha parcial por entrada) e o consumidor ainda tem `walletVersion` em `WalletBalanceChanged` como defesa. O `DISTINCT ON` da cabeça percorre as pendentes; com outbox drenada isso é pequeno, e um índice `(aggregate_id, occurred_at, id) WHERE published_at IS NULL` seria o próximo passo se a fila pendente crescer.
 - **Relógio**: leases e agendamentos dependem de relógios sincronizados entre as instâncias da aplicação (NTP em produção). O lease de 30s tolera desvios pequenos.
 - **Métricas por instância**: cada processo expõe as suas; a agregação seria feita pelo Prometheus. `outbox_lag_seconds` e `dlq_depth` são globais porque vêm do banco e da fila.
 - **Consumidor de eventos** fora do escopo: os eventos ficam em `wagering-events.fifo`, prontos para consumo com deduplicação por `eventId`.
