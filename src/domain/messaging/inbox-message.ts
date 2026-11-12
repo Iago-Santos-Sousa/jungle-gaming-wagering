@@ -11,7 +11,6 @@ export interface InboxMessageState extends ReceiveInboxProps {
   processedAt: Date | undefined;
 }
 
-// Registro persistente de mensagens consumidas, chave (consumerName, messageId)
 export class InboxMessage {
   private constructor(
     public readonly messageId: string,

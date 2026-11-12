@@ -3,7 +3,6 @@ import { ApiExcludeController } from '@nestjs/swagger';
 import { PrometheusWageringMetrics } from '../../infrastructure/observability/prometheus-metrics';
 import { Public } from './auth/public.decorator';
 
-// Exposição das métricas no formato Prometheus
 @ApiExcludeController()
 @Public()
 @Controller('metrics')

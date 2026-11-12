@@ -4,7 +4,6 @@ import type { AppConfig } from '../config/app-config';
 import { persistenceEntities } from './entities';
 import { migrationsList } from './migrations';
 
-// Configuração única do ORM, reaproveitada pela aplicação, pelos testes e pelos scripts
 export function buildOrmConfig(config: AppConfig): Options {
   const { database } = config;
   return defineConfig({

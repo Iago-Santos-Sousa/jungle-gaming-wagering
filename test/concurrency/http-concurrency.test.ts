@@ -39,7 +39,6 @@ describe('concorrência real (requisições simultâneas)', () => {
     const outcomes = first.map((r) => `${r.status}:${r.body.status}:${r.body.failureCode ?? ''}`).sort();
     expect(outcomes).toEqual(['201:PROCESSED:', '422:REJECTED:INSUFFICIENT_FUNDS']);
 
-    // Retry concorrente das duas requisições devolve o resultado original e não duplica o débito
     const retries = await Promise.all([...bodies, ...bodies].map((body) => submitWager(api, body)));
     expect(retries.every((r) => r.body.idempotentReplay)).toBe(true);
     expect(retries.map((r) => r.status).sort()).toEqual([200, 200, 422, 422]);

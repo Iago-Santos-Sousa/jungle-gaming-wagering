@@ -7,7 +7,6 @@ export interface ApiResponse<T = Record<string, unknown>> {
   headers: Headers;
 }
 
-// Cliente HTTP mínimo sobre fetch, contra a instância real da aplicação
 export function apiClient(baseUrl: string) {
   async function request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<ApiResponse<T>> {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -68,7 +67,7 @@ export interface WagerResult {
   balance: { amount: string; currency: string } | null;
   failureCode?: string;
   idempotentReplay: boolean;
-  // Presentes nas respostas de erro (400, 409, 503)
+  // Presentes nas respostas de erro (400, 404, 409, 500, 503)
   code?: string;
   details?: string[];
 }
@@ -115,7 +114,6 @@ export async function readWalletState(em: EntityManager, walletId: string): Prom
   };
 }
 
-// Invariante final de todos os testes
 export async function expectLedgerConsistent(em: EntityManager, walletId: string): Promise<WalletState> {
   const state = await readWalletState(em, walletId);
   expect(state.ledgerSum).toBe(state.balance);

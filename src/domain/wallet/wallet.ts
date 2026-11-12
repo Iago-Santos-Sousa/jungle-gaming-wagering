@@ -12,7 +12,6 @@ export interface WalletState {
   updatedAt: Date;
 }
 
-// Resultado de uma movimentação: tudo que o lançamento do ledger precisa para ficar consistente
 export interface BalanceMovement {
   direction: LedgerDirection;
   money: Money;

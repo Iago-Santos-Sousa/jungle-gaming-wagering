@@ -1,7 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
-// Documentação OpenAPI servida em /docs (JSON em /docs-json)
 export function setupSwagger(app: INestApplication): void {
   const document = SwaggerModule.createDocument(
     app,

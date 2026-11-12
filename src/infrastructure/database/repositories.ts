@@ -235,7 +235,6 @@ class MikroOrmInboxRepository implements InboxRepository {
     );
     if (rows.length === 1) return null;
 
-    // Só na duplicata: lê o registro confirmado para comparar o payload
     const [existing] = await this.em.execute<{ payload_hash: string; received_at: Date; processed_at: Date | null }[]>(
       `select payload_hash, received_at, processed_at from inbox_messages where consumer_name = ? and message_id = ?`,
       [message.consumerName, message.messageId],
@@ -439,7 +438,6 @@ class MikroOrmOutboxRepository implements OutboxRepository {
   }
 }
 
-// Conjunto de repositórios ligados a um mesmo EntityManager (e portanto à mesma transação)
 export class MikroOrmRepositoryScope implements RepositoryScope {
   readonly wallets: WalletRepository;
   readonly transactions: WagerTransactionRepository;

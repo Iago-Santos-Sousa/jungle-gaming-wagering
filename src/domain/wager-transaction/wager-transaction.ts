@@ -14,14 +14,13 @@ export enum WagerTransactionKind {
 }
 
 export enum WagerTransactionStatus {
-  Pending = 'PENDING', // aceita, ainda não aplicada
-  PendingReference = 'PENDING_REFERENCE', // aguardando a transação referenciada
-  Processed = 'PROCESSED', // aplicada (terminal)
+  Pending = 'PENDING',
+  PendingReference = 'PENDING_REFERENCE',
+  Processed = 'PROCESSED',
   Rejected = 'REJECTED', // violação de regra de negócio (terminal)
   Failed = 'FAILED', // erro permanente de infraestrutura (terminal, auditável)
 }
 
-// Kinds que um provedor pode submeter pela API ou pela fila
 export const SUBMITTABLE_KINDS = [
   WagerTransactionKind.Bet,
   WagerTransactionKind.Win,
@@ -93,18 +92,17 @@ export interface WagerTransactionState {
   nextAttemptAt: Date | undefined;
 }
 
-// Resultado da validação de uma referência
 export type ReferenceCheck =
   | { outcome: 'resolved'; reference: WagerTransaction }
   | { outcome: 'missing' }
   | { outcome: 'invalid'; failureCode: FailureCode };
 
-// Hash canônico do payload de negócio (algoritmo documentado no ARCHITECTURE.md)
 // Hash do inbox: conteúdo de negócio mais a Idempotency-Key, para detectar messageId reutilizado com outra operação
 export function computeInboxPayloadHash(payload: WagerPayload & { idempotencyKey: string }): string {
   return hashPayload({ idempotencyKey: payload.idempotencyKey, wagerPayloadHash: computeWagerPayloadHash(payload) });
 }
 
+// Hash canônico do payload de negócio (algoritmo documentado no ARCHITECTURE.md)
 export function computeWagerPayloadHash(payload: WagerPayload): string {
   return hashPayload({
     providerId: payload.providerId,
@@ -149,7 +147,6 @@ export class WagerTransaction {
     private _nextAttemptAt?: Date,
   ) {}
 
-  /** Nasce em PENDING. Valida a exigência de referência por kind. */
   static create(props: CreateWagerTransactionProps): WagerTransaction {
     if (!SUBMITTABLE_KINDS.includes(props.kind)) throw new InvalidArgumentError(`Kind ${String(props.kind)} cannot be submitted`);
     if (props.providerId === INTERNAL_PROVIDER_ID) throw new InvalidArgumentError('Provider id is reserved');
@@ -182,7 +179,6 @@ export class WagerTransaction {
     );
   }
 
-  // Transação interna de crédito de abertura; nunca vem de provedor
   static createOpening(props: { id: string; walletId: string; playerId: string; money: Money; createdAt: Date }): WagerTransaction {
     if (!props.money.isPositive()) throw new InvalidArgumentError('Opening amount must be greater than zero');
     const externalTransactionId = `opening:${props.walletId}`;
@@ -256,7 +252,6 @@ export class WagerTransaction {
     return this._nextAttemptAt;
   }
 
-  // ---- transições (lançam InvalidTransactionStateError se o estado atual for terminal)
 
   markProcessed(referenceTransactionId: string | undefined, at: Date, resultBalance: Money): void {
     this.assertNotTerminal('markProcessed');
@@ -293,7 +288,6 @@ export class WagerTransaction {
     this._nextAttemptAt = undefined;
   }
 
-  // ---- consultas de domínio
 
   isTerminal(): boolean {
     return TERMINAL_STATUSES.has(this._status);
@@ -331,7 +325,6 @@ export class WagerTransaction {
     }
   }
 
-  // Valida a referência pelas regras de mesmo provider, player, wallet, moeda e rodada
   checkReference(reference: WagerTransaction | null | undefined): ReferenceCheck {
     // Referência ainda não aplicada equivale a ausente: será resolvida depois
     if (!reference || reference.status === WagerTransactionStatus.Pending || reference.status === WagerTransactionStatus.PendingReference) {

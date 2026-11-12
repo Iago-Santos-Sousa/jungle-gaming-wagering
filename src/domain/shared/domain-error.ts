@@ -1,4 +1,3 @@
-// Erro base do domínio: carrega um código estável e legível por máquina
 export abstract class DomainError extends Error {
   abstract readonly code: string;
 
@@ -8,12 +7,10 @@ export abstract class DomainError extends Error {
   }
 }
 
-// Entrada que viola o contrato de um value object ou de uma factory
 export class InvalidArgumentError extends DomainError {
   readonly code = 'INVALID_ARGUMENT';
 }
 
-// Operação entre valores de moedas diferentes
 export class CurrencyMismatchError extends DomainError {
   readonly code = 'CURRENCY_MISMATCH';
 
@@ -22,7 +19,6 @@ export class CurrencyMismatchError extends DomainError {
   }
 }
 
-// Débito maior que o saldo disponível
 export class InsufficientFundsError extends DomainError {
   readonly code = 'INSUFFICIENT_FUNDS';
 
@@ -31,7 +27,6 @@ export class InsufficientFundsError extends DomainError {
   }
 }
 
-// Crédito que levaria o saldo além do que a persistência consegue representar
 export class BalanceLimitExceededError extends DomainError {
   readonly code = 'BALANCE_LIMIT_EXCEEDED';
 
@@ -45,7 +40,6 @@ export class InvalidTransactionStateError extends DomainError {
   readonly code = 'INVALID_TRANSACTION_STATE';
 }
 
-// Lançamento cuja aritmética não fecha (balanceBefore ± money !== balanceAfter)
 export class UnbalancedLedgerEntryError extends DomainError {
   readonly code = 'UNBALANCED_LEDGER_ENTRY';
 }

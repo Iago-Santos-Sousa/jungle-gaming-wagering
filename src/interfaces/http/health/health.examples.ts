@@ -1,4 +1,3 @@
-// Exemplos de resposta dos health checks usados na documentação Swagger
 export const HealthExamples = {
   live: { status: 'ok' },
   ready: { status: 'ok', checks: { database: 'up', sqs: 'up' } },

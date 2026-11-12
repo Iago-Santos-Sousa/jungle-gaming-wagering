@@ -34,7 +34,6 @@ export interface WagerTransactionRepository {
   // Reserva transações PENDING_REFERENCE vencidas (FOR UPDATE SKIP LOCKED) empurrando next_attempt_at para o fim do lease.
   // O claimedUntil devolvido funciona como token: só quem reservou processa enquanto o valor não mudar.
   claimDuePendingReferences(now: Date, limit: number, leaseMs: number): Promise<PendingReferenceClaim[]>;
-  // Antecipa a próxima tentativa das transações que aguardam esta referência na mesma wallet
   expeditePendingDependents(walletId: string, providerId: string, referenceExternalTransactionId: string, now: Date): Promise<number>;
 }
 
@@ -90,7 +89,6 @@ export interface OutboxRepository {
   scheduleRetries(failures: readonly OutboxFailure[], leaseUntil: Date): Promise<void>;
   // Mensagens não enviadas por bloqueio do agregado: devolve sem mexer em tentativas, backoff nem last_error
   releaseLease(messages: readonly OutboxMessage[], leaseUntil: Date): Promise<void>;
-  // Idade em segundos da mensagem pendente mais antiga (outbox lag)
   pendingLagSeconds(now: Date): Promise<number>;
 }
 
@@ -102,7 +100,6 @@ export interface RepositoryScope {
   outbox: OutboxRepository;
 }
 
-// Unidade de trabalho: tudo dentro de transactional() é confirmado junto ou nada é
 export abstract class UnitOfWork {
   abstract transactional<T>(work: (scope: RepositoryScope) => Promise<T>): Promise<T>;
   // Leituras e comandos de statement único, sem transação explícita

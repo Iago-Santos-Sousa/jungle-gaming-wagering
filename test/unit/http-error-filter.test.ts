@@ -11,7 +11,6 @@ interface CapturedResponse {
   headers: Record<string, string>;
 }
 
-// Logger silencioso: o filtro só registra erros 5xx
 const silentLogger = { setContext: () => undefined, error: () => undefined } as unknown as PinoLogger;
 
 function respond(exception: unknown): CapturedResponse {

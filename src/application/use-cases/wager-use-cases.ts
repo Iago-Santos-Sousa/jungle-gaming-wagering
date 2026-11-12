@@ -18,7 +18,6 @@ import { ConcurrencyConflictError, DuplicateTransactionError, IdempotencyConflic
 import { UnitOfWork, type PendingReferenceClaim, type RepositoryScope } from '../ports/repositories';
 import { Clock, IdGenerator, WageringMetrics, type MetricSource } from '../ports/system';
 
-// Política de tentativas para resolver referências fora de ordem (configurável por ambiente)
 export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
 
 export interface SubmitWagerCommand extends WagerPayload {
@@ -39,7 +38,7 @@ export interface WagerOutcome {
   balance: Money | null;
   failureCode: FailureCode | null;
   idempotentReplay: boolean;
-  // Mensagem já registrada no inbox: efeito já aplicado por uma entrega anterior
+  // Mensagem já registrada no inbox: a entrega anterior já decidiu (com efeito aplicado ou WALLET_NOT_FOUND sem efeito)
   duplicateMessage: boolean;
 }
 
@@ -54,7 +53,6 @@ function outcomeOf(transaction: WagerTransaction, idempotentReplay: boolean, dup
   };
 }
 
-// Aplica a decisão de domínio e persiste transação, ledger, wallet e outbox no escopo transacional recebido.
 // Compartilhado pela entrada HTTP, pelo consumer SQS e pelo worker de referências pendentes.
 @Injectable()
 export class WagerSettlementWriter {
@@ -99,7 +97,6 @@ export class WagerSettlementWriter {
   }
 }
 
-// Executa a unidade de trabalho com novas tentativas limitadas para conflitos transitórios
 async function withConflictRetry<T>(metrics: WageringMetrics, component: string, work: () => Promise<T>): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -115,7 +112,6 @@ async function withConflictRetry<T>(metrics: WageringMetrics, component: string,
   }
 }
 
-// Caso de uso único para a entrada HTTP e para o consumer SQS
 @Injectable()
 export class SubmitWagerTransactionUseCase {
   constructor(
@@ -230,7 +226,6 @@ export class SubmitWagerTransactionUseCase {
   }
 }
 
-// Reprocessa uma transação PENDING_REFERENCE: chamado pelo worker agendado
 @Injectable()
 export class ReprocessPendingReferenceUseCase {
   constructor(

@@ -66,7 +66,6 @@ export interface WagerTransactionRejectedData {
   failureCode: FailureCode;
 }
 
-// Transação rejeitada por regra de negócio
 export class WagerTransactionRejected extends IntegrationEvent<WagerTransactionRejectedData> {
   readonly eventType = 'WagerTransactionRejected';
   readonly version = 1;
@@ -129,7 +128,6 @@ export interface WagerTransactionPendingReferenceData {
   nextAttemptAt: string;
 }
 
-// Referência ausente: a transação aguarda reprocessamento
 export class WagerTransactionPendingReference extends IntegrationEvent<WagerTransactionPendingReferenceData> {
   readonly eventType = 'WagerTransactionPendingReference';
   readonly version = 1;
@@ -153,7 +151,6 @@ export class WagerTransactionPendingReference extends IntegrationEvent<WagerTran
   }
 }
 
-// Eventos resultantes de uma decisão sobre a transação.
 // PENDING_REFERENCE só publica na primeira vez, para não repetir o evento a cada tentativa.
 export function eventsForOutcome(
   transaction: WagerTransaction,

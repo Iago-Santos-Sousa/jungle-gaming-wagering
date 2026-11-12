@@ -15,7 +15,6 @@ export function createSqsClient(config: AppConfig): SQSClient {
   });
 }
 
-// Resolve e memoriza as URLs das filas. A memoização é só otimização de leitura.
 @Injectable()
 export class SqsQueueResolver {
   private readonly urls = new Map<string, Promise<string>>();

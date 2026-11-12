@@ -1,6 +1,5 @@
 import { MAX_TRANSACTION_ATTEMPTS } from '../../application/errors';
 
-// Token de injeção da configuração tipada da aplicação
 export const APP_CONFIG = Symbol('APP_CONFIG');
 
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
@@ -30,7 +29,6 @@ export interface SqsConfig {
   visibilityTimeoutSeconds: number;
   waitTimeSeconds: number;
   batchSize: number;
-  // Backoff da visibilidade em erro transitório (segundos)
   retryBaseDelaySeconds: number;
   retryMaxDelaySeconds: number;
 }
@@ -56,7 +54,6 @@ const LOG_LEVELS: readonly LogLevel[] = ['fatal', 'error', 'warn', 'info', 'debu
 
 type Env = Record<string, string | undefined>;
 
-// Erro de configuração: falha rápido no boot em vez de rodar com valores inválidos
 export class InvalidConfigError extends Error {
   constructor(key: string, reason: string) {
     super(`Invalid environment variable ${key}: ${reason}`);
@@ -105,7 +102,6 @@ function assertShutdownBudget(config: AppConfig): AppConfig {
   return config;
 }
 
-// Lê e valida as variáveis de ambiente uma única vez no boot
 export function loadConfig(env: Env = process.env): AppConfig {
   return assertShutdownBudget({
     nodeEnv: readString(env, 'NODE_ENV', 'development'),
@@ -153,7 +149,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
       pollIntervalMs: readInt(env, 'PENDING_REFERENCE_POLL_INTERVAL_MS', 1_000, 1),
       batchSize: readInt(env, 'PENDING_REFERENCE_BATCH_SIZE', 50, 1),
       maxAttempts: readInt(env, 'PENDING_REFERENCE_MAX_ATTEMPTS', 10, 1),
-      // Tempo em que um lote reservado fica exclusivo da instância antes de voltar a ficar disponível
       leaseMs: readInt(env, 'PENDING_REFERENCE_LEASE_MS', 30_000, 1),
       baseDelayMs: readInt(env, 'PENDING_REFERENCE_BASE_DELAY_MS', 1_000, 1),
       maxDelayMs: readInt(env, 'PENDING_REFERENCE_MAX_DELAY_MS', 300_000, 1),

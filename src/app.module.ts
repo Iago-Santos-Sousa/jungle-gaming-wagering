@@ -57,7 +57,6 @@ export class AppModule {
             exceptionFactory: validationExceptionFactory,
           }),
         },
-        // Portas da aplicação ligadas às implementações de infraestrutura
         { provide: UnitOfWork, useClass: MikroOrmUnitOfWork },
         { provide: Clock, useClass: SystemClock },
         { provide: IdGenerator, useClass: UuidV7Generator },
@@ -72,7 +71,6 @@ export class AppModule {
           provide: OUTBOX_RETRY_POLICY,
           useValue: new RetryPolicy(config.outbox.baseDelayMs, config.outbox.maxDelayMs),
         },
-        // Casos de uso
         PublishOutboxUseCase,
         WagerSettlementWriter,
         CreateWalletUseCase,

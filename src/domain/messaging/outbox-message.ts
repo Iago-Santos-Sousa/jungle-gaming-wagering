@@ -68,7 +68,6 @@ export class OutboxMessage {
     this._publishedAt = at;
   }
 
-  /** incrementa attempts e calcula o próximo nextAttemptAt (backoff) */
   scheduleRetry(now: Date, policy: RetryPolicy): void {
     if (!this.isPending()) throw new InvalidTransactionStateError(`Outbox message ${this.id} already published`);
     this._attempts += 1;

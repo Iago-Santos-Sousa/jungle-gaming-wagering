@@ -9,9 +9,7 @@ export interface SettlementInput {
   transaction: WagerTransaction;
   // Wallet já travada pela camada de aplicação
   wallet: Wallet;
-  // Resultado da busca por (providerId, referenceExternalTransactionId); null se ausente
   reference: WagerTransaction | null;
-  // Se a referência já possui uma reversão PROCESSED
   referenceAlreadyReversed: boolean;
   referencePolicy: RetryPolicy;
   now: Date;
@@ -85,7 +83,6 @@ export function settleWagerTransaction(input: SettlementInput): SettlementResult
   }
 }
 
-// Referência ausente: agenda nova tentativa com backoff ou rejeita ao esgotar o limite
 function deferForReference({ transaction, wallet, referencePolicy, now }: SettlementInput): void {
   const attempt = transaction.referenceAttempts + 1;
   if (referencePolicy.isExhausted(attempt)) {
