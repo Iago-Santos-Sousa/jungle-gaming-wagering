@@ -428,6 +428,39 @@ describe('transactional outbox', () => {
 
   const claimOutbox = (uow: UnitOfWork, limit: number, leaseMs: number) => uow.transactional((scope) => scope.outbox.claimDue(new Date(), limit, leaseMs));
 
+  test('is_head: com inserts e publicações concorrentes, cada agregado pendente tem uma única cabeça, a de menor sequence', async () => {
+    const other = await startTestApp(overrides);
+    try {
+      const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(api, '100.00')));
+      let betting = true;
+      // Publishers rodando enquanto as apostas inserem eventos nas mesmas wallets
+      const publishing = (async () => {
+        while (betting) await Promise.all([ctx.app.get(OutboxPublisherWorker).runOnce(), other.app.get(OutboxPublisherWorker).runOnce()]);
+      })();
+      for (let round = 0; round < 6; round++) {
+        await Promise.all(wallets.map((wallet) => submitWager(api, wagerBody({ ...wallet, amount: '1.00' }))));
+      }
+      betting = false;
+      await publishing;
+
+      const violations = await em.fork().execute<{ aggregate_id: string }[]>(
+        `with pending as (
+           select aggregate_id, id, is_head, row_number() over (partition by aggregate_id order by sequence) as rn
+             from outbox_messages where published_at is null)
+         select aggregate_id from pending
+          group by aggregate_id
+         having count(*) filter (where is_head) <> 1
+             or bool_or(is_head and rn <> 1)`,
+      );
+      expect(violations).toEqual([]);
+
+      // E tudo acaba publicado em ordem por wallet
+      await publishAll([ctx.app.get(OutboxPublisherWorker), other.app.get(OutboxPublisherWorker)]);
+    } finally {
+      await other.close();
+    }
+  });
+
   test('claim reserva só um prefixo de cada agregado, com teto de mensagens, e o agregado fica exclusivo', async () => {
     const { pendingIds } = await walletWithOnlyBalanceEventsPending(7);
     expect(pendingIds).toHaveLength(8);
@@ -458,8 +491,8 @@ describe('transactional outbox', () => {
     const [head, next] = stale.messages;
     head!.scheduleRetry(new Date(), new RetryPolicy(1_000, 60_000));
     next!.markPublished(new Date());
-    await uow.read(async (scope) => {
-      await scope.outbox.scheduleRetry(head!, 'late failure', stale.leaseUntil);
+    await uow.transactional(async (scope) => {
+      await scope.outbox.scheduleRetries([{ message: head!, error: 'late failure' }], stale.leaseUntil);
       await scope.outbox.markPublished([next!], stale.leaseUntil);
     });
 

@@ -133,7 +133,8 @@ export function toOutboxMessage(row: OutboxMessageRow): OutboxMessage {
   });
 }
 
-export function fromOutboxMessage(message: OutboxMessage): OutboxMessageRow {
+// isHead é decidido pelo repositório no insert (depende das pendentes do agregado no banco)
+export function fromOutboxMessage(message: OutboxMessage, isHead = false): OutboxMessageRow {
   return {
     id: message.id,
     aggregateId: message.aggregateId,
@@ -146,5 +147,6 @@ export function fromOutboxMessage(message: OutboxMessage): OutboxMessageRow {
     lockedUntil: null,
     publishedAt: message.publishedAt ?? null,
     lastError: null,
+    isHead,
   };
 }

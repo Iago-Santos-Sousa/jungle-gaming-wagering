@@ -94,6 +94,8 @@ export const OutboxMessageRecord = defineEntity({
     lockedUntil: p.datetime().columnType('timestamptz').nullable(),
     publishedAt: p.datetime().columnType('timestamptz').nullable(),
     lastError: p.string().length(512).nullable(),
+    // Pendente de menor sequence do agregado; mantida pelo repositório da outbox sob advisory lock
+    isHead: p.boolean(),
   },
 });
 export type OutboxMessageRow = InferEntity<typeof OutboxMessageRecord>;

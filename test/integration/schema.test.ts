@@ -54,6 +54,17 @@ afterAll(async () => {
 describe('migrations', () => {
   test('são reversíveis: down remove o schema e up recria', async () => {
     const migrator = ctx.orm.migrator;
+    const count = async (sql: string) => (await em.execute<{ n: number }[]>(sql))[0]?.n;
+    const headColumn = `select count(*)::int as n from information_schema.columns where table_name = 'outbox_messages' and column_name = 'is_head'`;
+    const index = (name: string) => `select count(*)::int as n from pg_indexes where indexname = '${name}'`;
+    expect(await count(headColumn)).toBe(1);
+    expect(await count(index('outbox_messages_due_head_idx'))).toBe(1);
+    expect(await count(index('outbox_messages_due_idx'))).toBe(0);
+    // Desfaz a flag de cabeça: coluna e índice somem, e o índice de vencidas volta
+    await migrator.down();
+    expect(await count(headColumn)).toBe(0);
+    expect(await count(index('outbox_messages_due_head_idx'))).toBe(0);
+    expect(await count(index('outbox_messages_due_idx'))).toBe(1);
     const sequenceUnique = `select count(*)::int as n from pg_constraint where conname = 'outbox_messages_sequence_uq'`;
     expect((await em.execute<{ n: number }[]>(sequenceUnique))[0]?.n).toBe(0);
     // Desfaz a remoção do UNIQUE redundante: a constraint volta
@@ -69,6 +80,7 @@ describe('migrations', () => {
     await migrator.up();
     expect((await em.execute<{ n: number }[]>(sequenceColumn))[0]?.n).toBe(1);
     expect((await em.execute<{ n: number }[]>(sequenceUnique))[0]?.n).toBe(0);
+    expect(await count(headColumn)).toBe(1);
     const tables = await em.execute<{ table_name: string }[]>(
       `select table_name from information_schema.tables where table_schema = 'public' and table_name <> 'mikro_orm_migrations' order by table_name`,
     );

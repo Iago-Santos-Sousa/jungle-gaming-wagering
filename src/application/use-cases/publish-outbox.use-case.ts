@@ -47,13 +47,13 @@ export class PublishOutboxUseCase {
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
-    await this.uow.read(async (scope) => {
+    // Só falha real ganha tentativa, backoff e last_error; a cabeça com backoff continua segurando o agregado
+    for (const { message } of failed) message.scheduleRetry(now, this.retryPolicy);
+
+    // Confirmação numa transação: a promoção de cabeça usa o mesmo advisory lock do insert da outbox
+    await this.uow.transactional(async (scope) => {
       await scope.outbox.markPublished(published, leaseUntil);
-      // Só falha real ganha tentativa, backoff e last_error; a cabeça com backoff continua segurando o agregado
-      for (const { message, error } of failed) {
-        message.scheduleRetry(now, this.retryPolicy);
-        await scope.outbox.scheduleRetry(message, error, leaseUntil);
-      }
+      await scope.outbox.scheduleRetries(failed, leaseUntil);
       // Bloqueadas nunca foram enviadas: só devolvem o lease
       await scope.outbox.releaseLease(skipped, leaseUntil);
     });
