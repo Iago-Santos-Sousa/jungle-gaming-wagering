@@ -12,9 +12,16 @@ export interface OutboxPublishOptions {
   leaseMs: number;
 }
 
+export interface OutboxPublishCycle {
+  // Mensagens reservadas no ciclo; igual ao batchSize indica que provavelmente há mais trabalho
+  claimed: number;
+  published: number;
+}
+
 // Publica eventos confirmados da outbox. Vários publishers podem rodar ao mesmo tempo:
-// o claim reserva agregados inteiros com lease e SKIP LOCKED, então cada agregado tem um único publisher por vez
-// e seus eventos saem em ordem. Um lease vencido volta a ficar disponível.
+// o claim reserva um prefixo de cada agregado com lease e SKIP LOCKED, então cada agregado tem um único publisher
+// por vez e seus eventos saem em ordem. Um lease vencido volta a ficar disponível, e o token do lease impede que um
+// publisher atrasado libere ou reagende linhas que outro já assumiu.
 @Injectable()
 export class PublishOutboxUseCase {
   constructor(
@@ -28,29 +35,36 @@ export class PublishOutboxUseCase {
     logger.setContext(PublishOutboxUseCase.name);
   }
 
-  // Retorna quantos eventos foram publicados neste ciclo
-  async publishBatch(options: OutboxPublishOptions): Promise<number> {
+  async publishBatch(options: OutboxPublishOptions): Promise<OutboxPublishCycle> {
     // Transação curta só para o claim: o lock das cabeças segura o agregado até o lease ficar visível
-    const claimed = await this.uow.transactional((scope) => scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs));
-    if (claimed.length === 0) return 0;
+    const { leaseUntil, messages: claimed } = await this.uow.transactional((scope) =>
+      scope.outbox.claimDue(this.clock.now(), options.batchSize, options.leaseMs),
+    );
+    if (claimed.length === 0) return { claimed: 0, published: 0 };
 
     // Publicação fora de transação: nenhuma conexão fica presa esperando o broker
-    const { published, failed } = await this.publisher.publish(claimed);
+    const { published, failed, skipped } = await this.publisher.publish(claimed);
     const now = this.clock.now();
     for (const message of published) message.markPublished(now);
 
     await this.uow.read(async (scope) => {
-      await scope.outbox.markPublished(published);
+      await scope.outbox.markPublished(published, leaseUntil);
+      // Só falha real ganha tentativa, backoff e last_error; a cabeça com backoff continua segurando o agregado
       for (const { message, error } of failed) {
         message.scheduleRetry(now, this.retryPolicy);
-        await scope.outbox.scheduleRetry(message, error);
+        await scope.outbox.scheduleRetry(message, error, leaseUntil);
       }
+      // Bloqueadas nunca foram enviadas: só devolvem o lease
+      await scope.outbox.releaseLease(skipped, leaseUntil);
     });
 
     if (failed.length > 0) {
       for (let i = 0; i < failed.length; i++) this.metrics.retry('outbox');
-      this.logger.warn({ failed: failed.length, published: published.length, error: failed[0]?.error }, 'outbox publish partially failed');
+      this.logger.warn(
+        { failed: failed.length, skipped: skipped.length, published: published.length, error: failed[0]?.error },
+        'outbox publish partially failed',
+      );
     }
-    return published.length;
+    return { claimed: claimed.length, published: published.length };
   }
 }

@@ -20,30 +20,34 @@ export class SqsEventPublisher extends EventPublisher {
     super();
   }
 
+  // Publica em rodadas: cada rodada envia o próximo evento de cada agregado ainda ativo, em lotes de até 10.
+  // Nenhum lote tem dois eventos do mesmo agregado, então uma falha parcial por entrada do SendMessageBatch
+  // nunca deixa um evento posterior passar na frente de um anterior. Uma wallet com muitos eventos publica um por
+  // chamada; o claim limita o lote, então o pior caso cabe no lease.
   async publish(messages: readonly OutboxMessage[]): Promise<PublishResult> {
-    const result: PublishResult = { published: [], failed: [] };
-    // Agregados com falha neste ciclo: os eventos seguintes deles esperam a próxima tentativa
-    const blocked = new Set<string>();
-    let pending: OutboxMessage[] = [];
-
-    const flush = async (): Promise<void> => {
-      if (pending.length === 0) return;
-      const chunk = pending;
-      pending = [];
-      const failedBefore = result.failed.length;
-      await this.publishChunk(chunk, result);
-      for (const { message } of result.failed.slice(failedBefore)) blocked.add(message.aggregateId);
-    };
-
+    const result: PublishResult = { published: [], failed: [], skipped: [] };
+    // Fila de cada agregado, na ordem recebida (sequence)
+    const queues = new Map<string, OutboxMessage[]>();
     for (const message of messages) {
-      if (blocked.has(message.aggregateId)) {
-        result.failed.push({ message, error: 'blocked: an earlier event of this aggregate failed' });
-        continue;
-      }
-      pending.push(message);
-      if (pending.length === SQS_BATCH_LIMIT) await flush();
+      const queue = queues.get(message.aggregateId);
+      if (queue) queue.push(message);
+      else queues.set(message.aggregateId, [message]);
     }
-    await flush();
+
+    while (queues.size > 0) {
+      const round = [...queues.values()].map((queue) => queue[0]!);
+      const failedBefore = result.failed.length;
+      for (let start = 0; start < round.length; start += SQS_BATCH_LIMIT) {
+        await this.publishChunk(round.slice(start, start + SQS_BATCH_LIMIT), result);
+      }
+      // Agregado com falha nesta rodada: os seguintes dele não são enviados neste ciclo
+      const blocked = new Set(result.failed.slice(failedBefore).map(({ message }) => message.aggregateId));
+      for (const [aggregateId, queue] of queues) {
+        queue.shift();
+        if (blocked.has(aggregateId)) result.skipped.push(...queue);
+        if (blocked.has(aggregateId) || queue.length === 0) queues.delete(aggregateId);
+      }
+    }
     return result;
   }
 

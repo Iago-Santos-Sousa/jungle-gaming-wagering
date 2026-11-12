@@ -31,7 +31,14 @@ export async function drain(client: SQSClient, url: string, waitTimeSeconds = 1)
   const all: Message[] = [];
   for (;;) {
     const { Messages } = await client.send(
-      new ReceiveMessageCommand({ QueueUrl: url, MaxNumberOfMessages: 10, WaitTimeSeconds: waitTimeSeconds, MessageAttributeNames: ['All'] }),
+      new ReceiveMessageCommand({
+        QueueUrl: url,
+        MaxNumberOfMessages: 10,
+        WaitTimeSeconds: waitTimeSeconds,
+        MessageAttributeNames: ['All'],
+        // SequenceNumber é a ordem de envio atribuída pelo broker FIFO; a ordem de entrega do emulador pode variar com o relógio
+        MessageSystemAttributeNames: ['SequenceNumber'],
+      }),
     );
     if (!Messages?.length) return all;
     all.push(...Messages);
@@ -49,6 +56,11 @@ export async function drainUntil(client: SQSClient, url: string, done: (all: Mes
     all.push(...(await drain(client, url)));
   }
   return all;
+}
+
+// Ordena pela ordem de envio registrada pelo broker FIFO (SequenceNumber, string numérica de largura fixa)
+export function bySendOrder(messages: readonly Message[]): Message[] {
+  return [...messages].sort((a, b) => BigInt(a.Attributes?.SequenceNumber ?? '0') < BigInt(b.Attributes?.SequenceNumber ?? '0') ? -1 : 1);
 }
 
 // Repete a verificação até passar ou estourar o tempo

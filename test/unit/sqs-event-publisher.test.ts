@@ -28,16 +28,38 @@ function fakeClient(failIds: Set<string>) {
 
 const queues = { getUrl: () => Promise.resolve('http://queue') } as unknown as SqsQueueResolver;
 
+const aggregateOf = (id: string) => id.split('-')[0]!;
+
 describe('SqsEventPublisher', () => {
-  test('depois da primeira falha de um agregado, os eventos seguintes dele não são enviados', async () => {
-    // 12 mensagens: o primeiro lote (10) leva a falha de a-1; a-2 cai no segundo lote e precisa ficar retida
-    const messages = [message('a-1', 'a'), ...Array.from({ length: 9 }, (_, i) => message(`b-${i}`, 'b')), message('a-2', 'a'), message('c-1', 'c')];
+  test('nenhum lote leva dois eventos do mesmo agregado, e cada agregado sai em ordem', async () => {
+    const messages = [message('a-1', 'a'), message('b-1', 'b'), message('a-2', 'a'), message('a-3', 'a'), message('b-2', 'b')];
+    const { client, sent } = fakeClient(new Set());
+    const result = await new SqsEventPublisher(client, queues, loadConfig({})).publish(messages);
+
+    for (const batch of sent) expect(new Set(batch.map(aggregateOf)).size).toBe(batch.length);
+    expect(sent.flat().filter((id) => id.startsWith('a-'))).toEqual(['a-1', 'a-2', 'a-3']);
+    expect(sent.flat().filter((id) => id.startsWith('b-'))).toEqual(['b-1', 'b-2']);
+    expect(result.published).toHaveLength(5);
+    expect(result.failed).toEqual([]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  test('falha de um agregado retém os eventos seguintes dele como skipped, sem enviá-los', async () => {
+    const messages = [message('a-1', 'a'), message('b-1', 'b'), message('a-2', 'a'), message('a-3', 'a'), message('b-2', 'b')];
     const { client, sent } = fakeClient(new Set(['a-1']));
     const result = await new SqsEventPublisher(client, queues, loadConfig({})).publish(messages);
 
-    expect(sent).toHaveLength(2);
-    expect(sent[1]).toEqual(['c-1']);
-    expect(result.failed.map(({ message: failed }) => failed.id)).toEqual(['a-1', 'a-2']);
-    expect(result.published.map((published) => published.id)).toEqual([...Array.from({ length: 9 }, (_, i) => `b-${i}`), 'c-1']);
+    expect(sent.flat()).not.toContain('a-2');
+    expect(sent.flat()).not.toContain('a-3');
+    expect(result.failed.map(({ message: failed }) => failed.id)).toEqual(['a-1']);
+    expect(result.skipped.map((skipped) => skipped.id)).toEqual(['a-2', 'a-3']);
+    expect(result.published.map((published) => published.id)).toEqual(['b-1', 'b-2']);
+  });
+
+  test('mais de 10 agregados numa rodada são divididos em lotes de até 10', async () => {
+    const messages = Array.from({ length: 12 }, (_, i) => message(`g${i}-1`, `g${i}`));
+    const { client, sent } = fakeClient(new Set());
+    await new SqsEventPublisher(client, queues, loadConfig({})).publish(messages);
+    expect(sent.map((batch) => batch.length)).toEqual([10, 2]);
   });
 });

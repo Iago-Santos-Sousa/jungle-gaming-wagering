@@ -30,14 +30,14 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, BeforeAppl
   }
 
   beforeApplicationShutdown(): Promise<void> {
-    return this.loop.stop();
+    return this.loop.stop(this.config.shutdownTimeoutMs);
   }
 
-  // Retorna true se o lote veio cheio (provavelmente há mais trabalho)
+  // Retorna true se o claim veio cheio (provavelmente há mais trabalho). O claim conta mensagens, com teto batchSize.
   async runOnce(): Promise<boolean> {
     const { batchSize, leaseMs } = this.config.outbox;
-    const published = await this.publishOutbox.publishBatch({ batchSize, leaseMs });
-    return published === batchSize;
+    const { claimed } = await this.publishOutbox.publishBatch({ batchSize, leaseMs });
+    return claimed === batchSize;
   }
 }
 
@@ -60,13 +60,15 @@ export class PendingReferenceWorker implements OnApplicationBootstrap, BeforeApp
   }
 
   beforeApplicationShutdown(): Promise<void> {
-    return this.loop.stop();
+    return this.loop.stop(this.config.shutdownTimeoutMs);
   }
 
   async runOnce(): Promise<boolean> {
     const { batchSize, leaseMs } = this.config.pendingReference;
     const claims = await this.reprocess.claimDue(batchSize, leaseMs);
     for (let start = 0; start < claims.length; start += PENDING_REFERENCE_CONCURRENCY) {
+      // Shutdown pedido: o resto do lote volta sozinho quando o lease vencer, e o token evita processamento duplo
+      if (this.loop.stopping) return false;
       await Promise.all(claims.slice(start, start + PENDING_REFERENCE_CONCURRENCY).map((claim) => this.reprocessOne(claim)));
     }
     return claims.length === batchSize;
