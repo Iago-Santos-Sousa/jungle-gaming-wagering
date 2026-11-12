@@ -146,6 +146,14 @@ describe('consumer SQS', () => {
     expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
     expect(await inboxConflicts()).toBe(conflictsBefore);
     expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+
+    // Mesmo messageId e mesma operação, mas com outra Idempotency-Key: o hash legado bate, a key não. É conflito.
+    await send({ ...data, idempotencyKey: `other-${newId()}` }, messageId);
+    await consumeUntilEmpty();
+    expect(await inboxConflicts()).toBe(conflictsBefore + 1);
+    expect(await expectLedgerConsistent(em, wallet.walletId)).toMatchObject({ balance: '90.00', debits: 1 });
+    expect(await drain(sqs, wagerUrl, 0)).toHaveLength(0);
+    expect(await drain(sqs, dlqUrl, 0)).toHaveLength(0);
   });
 
   test('worker morto depois do commit e antes do ack: a reentrega é deduplicada', async () => {
@@ -175,7 +183,8 @@ describe('consumer SQS', () => {
     await send({ ...messageData(wallet), kind: 'OPENING' });
     await send({ ...messageData(wallet), money: { amount: '1e3', currency: 'BRL' } });
     await consumeUntilEmpty();
-    const dead = await drain(sqs, dlqUrl);
+    // Espera as 3 chegarem: o emulador pode devolver receive vazio com mensagens ainda na fila
+    const dead = await drainUntil(sqs, dlqUrl, (all) => all.length >= 3, 10_000);
     expect(dead).toHaveLength(3);
     expect(dead.every((m) => m.MessageAttributes?.reason?.StringValue === 'invalid_message')).toBe(true);
     expect(await readWalletState(em, wallet.walletId)).toMatchObject({ balance: '100.00', entries: 1 });
